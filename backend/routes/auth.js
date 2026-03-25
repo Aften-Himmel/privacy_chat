@@ -11,9 +11,20 @@ router.post('/register', async (req, res) => {
   try {
     const { username, email, password } = req.body
 
-    // Check if user already exists
+    // Validate required fields
+    if (!username || !email || !password) {
+      return res.status(400).json({ message: 'All fields are required' })
+    }
+    if (username.length < 3 || username.length > 20) {
+      return res.status(400).json({ message: 'Username must be 3-20 characters' })
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters' })
+    }
+
+    // Check if user already exists (lowercase email for checking)
     const existingUser = await User.findOne({
-      $or: [{ email }, { username }]
+      $or: [{ email: email.toLowerCase() }, { username }]
     })
     if (existingUser) {
       return res.status(400).json({ message: 'Username or email already taken' })
@@ -56,8 +67,8 @@ router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body
 
-    // Find user by email
-    const user = await User.findOne({ email })
+    // Find user by email (lowercase for matching)
+    const user = await User.findOne({ email: email.toLowerCase() })
     if (!user) {
       return res.status(400).json({ message: 'Invalid email or password' })
     }

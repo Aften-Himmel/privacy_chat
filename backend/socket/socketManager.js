@@ -1,48 +1,82 @@
-// Keeps track of which userId maps to which socketId
-// so we can send real-time messages to specific users
-const onlineUsers = new Map()
+import jwt from 'jsonwebtoken'
+import Session from '../models/Session.js'
+import { clearPrivateMessages } from './privateStore.js'
+
+const onlineUsers = new Map() // userId -> socketId
 
 export const setupSocket = (io) => {
+  // ── Socket authentication middleware ──
+  io.use((socket, next) => {
+    const token = socket.handshake.auth.token
+    if (!token) return next(new Error('Authentication required'))
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET)
+      socket.userId = decoded.id
+      socket.username = decoded.username
+      next()
+    } catch {
+      next(new Error('Invalid or expired token'))
+    }
+  })
+
   io.on('connection', (socket) => {
-    console.log(`🔌 Socket connected: ${socket.id}`)
+    const userId = socket.userId
+    console.log(`Socket connected: ${socket.id} (user: ${userId})`)
 
-    // User registers themselves when they connect
-    socket.on('user:register', (userId) => {
-      onlineUsers.set(userId, socket.id)
-      console.log(`✅ User ${userId} registered with socket ${socket.id}`)
+    // Register user using verified identity from token
+    onlineUsers.set(userId, socket.id)
+    io.emit('users:online', Array.from(onlineUsers.keys()))
 
-      // Broadcast updated online users list to everyone
-      io.emit('users:online', Array.from(onlineUsers.keys()))
-    })
-
-    // Send a real-time notification to a specific user
+    // Manual notification send (client-to-client via server)
     socket.on('notification:send', ({ toUserId, notification }) => {
-      const targetSocketId = onlineUsers.get(toUserId)
-      if (targetSocketId) {
-        io.to(targetSocketId).emit('notification:receive', notification)
-      }
+      const target = onlineUsers.get(toUserId)
+      if (target) io.to(target).emit('notification:receive', notification)
     })
 
-    // Handle disconnection
-    socket.on('disconnect', () => {
-      // Find and remove the disconnected user
-      for (const [userId, socketId] of onlineUsers.entries()) {
-        if (socketId === socket.id) {
-          onlineUsers.delete(userId)
-          console.log(`❌ User ${userId} disconnected`)
-          break
-        }
-      }
-      // Broadcast updated online list
+    // Disconnect — clean up active sessions, wipe RAM, notify peers
+    socket.on('disconnect', async () => {
+      onlineUsers.delete(userId)
+      console.log(`User ${userId} disconnected`)
       io.emit('users:online', Array.from(onlineUsers.keys()))
+
+      // Find all active private sessions this user is in and end them
+      try {
+        const activeSessions = await Session.find({
+          participants: userId,
+          status: 'active',
+        })
+
+        for (const session of activeSessions) {
+          session.status = 'ended'
+          await session.save()
+          clearPrivateMessages(session._id.toString())
+
+          // Notify other participants
+          const otherIds = session.participants
+            .map(p => p.toString())
+            .filter(id => id !== userId)
+
+          for (const otherId of otherIds) {
+            const target = onlineUsers.get(otherId)
+            if (target) {
+              io.to(target).emit('notification:receive', {
+                type: 'private_session_ended',
+                conversationId: session.conversationId,
+                sessionId: session._id,
+                reason: 'disconnect',
+              })
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Error cleaning up sessions on disconnect:', err.message)
+      }
     })
   })
 }
 
-// Helper to send a notification from anywhere in the backend
+// Helper used by route handlers to push to a specific user
 export const sendNotification = (io, toUserId, notification) => {
-  const targetSocketId = onlineUsers.get(toUserId)
-  if (targetSocketId) {
-    io.to(targetSocketId).emit('notification:receive', notification)
-  }
+  const target = onlineUsers.get(toUserId)
+  if (target) io.to(target).emit('notification:receive', notification)
 }

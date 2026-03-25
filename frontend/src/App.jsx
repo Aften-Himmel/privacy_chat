@@ -4,11 +4,11 @@ import { SocketProvider } from './context/SocketContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import Login from './pages/Login'
 import Register from './pages/Register'
-import Chat from './pages/Chat'
-import Contacts from './pages/Contacts'
-import Invitations from './pages/Invitations'
+import ChatLayout from './components/ChatLayout'
+import ChatWindow from './pages/ChatWindow'
+import EmptyChat from './pages/EmptyChat'
 
-const App = () => {
+export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
@@ -17,14 +17,13 @@ const App = () => {
             <Route path="/" element={<Navigate to="/login" replace />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
-            <Route path="/chat" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
-            <Route path="/contacts" element={<ProtectedRoute><Contacts /></ProtectedRoute>} />
-            <Route path="/invitations" element={<ProtectedRoute><Invitations /></ProtectedRoute>} />
+            <Route path="/chat" element={<ProtectedRoute><ChatLayout /></ProtectedRoute>}>
+              <Route index element={<EmptyChat />} />
+              <Route path=":userId" element={<ChatWindow />} />
+            </Route>
           </Routes>
         </SocketProvider>
       </AuthProvider>
     </BrowserRouter>
   )
 }
-
-export default App
