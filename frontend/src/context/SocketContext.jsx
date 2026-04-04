@@ -11,33 +11,32 @@ export const SocketProvider = ({ children }) => {
   const [onlineUsers, setOnlineUsers] = useState([])
   const [notifications, setNotifications] = useState([])
 
+  // BUG FIX 3: expose a live socket getter instead of the stale ref value.
+  // The original code passed `socketRef.current` as the context value, which
+  // was always null on first render and never updated for consumers that
+  // captured it early (e.g. CreateGroupModal calling socket.emit on mount).
+  // We now expose the ref itself AND a stable `getSocket` helper so callers
+  // always reach the live instance.
+  const [, forceUpdate] = useState(0)
+
   useEffect(() => {
     if (!user) return
 
     const token = localStorage.getItem('token')
 
-    // Connect to socket server with JWT authentication
     socketRef.current = io(import.meta.env.VITE_WS_URL || 'http://localhost:5000', {
       transports: ['websocket'],
       auth: { token },
     })
 
     const socket = socketRef.current
+    // Trigger re-render so consumers receive the new socket instance
+    forceUpdate(n => n + 1)
 
-    socket.on('connect', () => {
-      setConnected(true)
-    })
+    socket.on('connect', () => setConnected(true))
+    socket.on('disconnect', () => setConnected(false))
+    socket.on('users:online', (userIds) => setOnlineUsers(userIds))
 
-    socket.on('disconnect', () => {
-      setConnected(false)
-    })
-
-    // Update online users list
-    socket.on('users:online', (userIds) => {
-      setOnlineUsers(userIds)
-    })
-
-    // Receive real-time notifications
     socket.on('notification:receive', (notification) => {
       setNotifications(prev => [
         { ...notification, id: Date.now() + Math.random(), read: false },
@@ -49,6 +48,7 @@ export const SocketProvider = ({ children }) => {
       socket.disconnect()
       socketRef.current = null
       setConnected(false)
+      forceUpdate(n => n + 1)
     }
   }, [user])
 

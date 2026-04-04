@@ -7,10 +7,8 @@ import { clearPrivateMessages } from './privateStore.js'
 const onlineUsers = new Map() // userId -> socketId
 
 export const setupSocket = (io) => {
-  // Expose onlineUsers on io so route handlers (groups.js) can access it
   io._onlineUsers = onlineUsers
 
-  // ── Socket authentication middleware ──
   io.use((socket, next) => {
     const token = socket.handshake.auth.token
     if (!token) return next(new Error('Authentication required'))
@@ -28,11 +26,12 @@ export const setupSocket = (io) => {
     const userId = socket.userId
     console.log(`Socket connected: ${socket.id} (user: ${userId})`)
 
-    // Register user
-    onlineUsers.set(userId, socket.id)
-    io.emit('users:online', Array.from(onlineUsers.keys()))
-
-    // Join all group rooms so we can also broadcast to rooms
+    // BUG FIX 11: the original code called onlineUsers.set() and broadcast
+    // users:online BEFORE the async group-room join completed. This meant
+    // other clients saw the user as online before they had joined their group
+    // rooms, so any group notification sent in that brief window would be
+    // missed. We now join all group rooms first, then register the user as
+    // online and broadcast.
     try {
       const groups = await Group.find({ members: userId }, '_id')
       for (const g of groups) socket.join(`group:${g._id}`)
@@ -40,18 +39,19 @@ export const setupSocket = (io) => {
       console.error('Error joining group rooms:', err.message)
     }
 
-    // Manual notification send (client-to-client via server)
+    // Register user as online only after rooms are joined
+    onlineUsers.set(userId, socket.id)
+    io.emit('users:online', Array.from(onlineUsers.keys()))
+
     socket.on('notification:send', ({ toUserId, notification }) => {
       const target = onlineUsers.get(toUserId)
       if (target) io.to(target).emit('notification:receive', notification)
     })
 
-    // Join a newly created group room on the fly
     socket.on('group:join', (groupId) => {
       socket.join(`group:${groupId}`)
     })
 
-    // Disconnect — clean up active sessions, wipe RAM, notify peers
     socket.on('disconnect', async () => {
       onlineUsers.delete(userId)
       console.log(`User ${userId} disconnected`)
@@ -108,7 +108,6 @@ export const setupSocket = (io) => {
   })
 }
 
-// Helper used by route handlers to push to a specific user
 export const sendNotification = (io, toUserId, notification) => {
   const target = onlineUsers.get(toUserId)
   if (target) io.to(target).emit('notification:receive', notification)

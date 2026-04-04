@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Outlet, useNavigate, useMatch } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useSocket } from '../context/SocketContext'
@@ -28,11 +28,16 @@ export default function ChatLayout() {
   const [query, setQuery]               = useState('')
   const [isSearchMode, setIsSearchMode] = useState(false)
   const [loading, setLoading]           = useState(false)
-  const [tab, setTab]                   = useState('chats')   // 'chats' | 'groups'
+  const [tab, setTab]                   = useState('chats')
   const [showCreateGroup, setShowCreateGroup] = useState(false)
-  
+
   const [pendingReceived, setPendingReceived] = useState([])
   const [pendingSent, setPendingSent]         = useState([])
+
+  // BUG FIX 1: processedRef prevents the group-notification useEffect from
+  // re-processing the same notifications on every render, which caused
+  // duplicate groups being added and redundant navigations.
+  const processedNotifRef = useRef(new Set())
 
   const debounced = useDebounce(query, 400)
 
@@ -71,9 +76,9 @@ export default function ChatLayout() {
 
   // Handle invitation & contact real-time updates
   useEffect(() => {
-    const hasInviteUpdate = notifications.some(n => 
-      n.type === 'invitation' || 
-      n.type === 'invitation_response' || 
+    const hasInviteUpdate = notifications.some(n =>
+      n.type === 'invitation' ||
+      n.type === 'invitation_response' ||
       n.type === 'contact_removed'
     )
     if (hasInviteUpdate) {
@@ -82,9 +87,13 @@ export default function ChatLayout() {
     }
   }, [notifications, fetchPendingInvites, fetchContacts])
 
-  // Handle group-related real-time updates in sidebar
+  // BUG FIX 1 (continued): guard each notification with processedNotifRef
+  // so group sidebar updates are applied exactly once per notification event.
   useEffect(() => {
     for (const n of notifications) {
+      if (processedNotifRef.current.has(n.id)) continue
+      processedNotifRef.current.add(n.id)
+
       if (n.type === 'group_added') {
         setGroups(prev => {
           const already = prev.some(g => g._id === n.group._id)
@@ -125,12 +134,15 @@ export default function ChatLayout() {
     }
   }
 
+  // BUG FIX 2: removed the alert() call after a successful respond action.
+  // The original code called alert(`Invitation ${action}`) which blocked the UI
+  // and made the UX feel broken — the InvitationsDropdown already closes itself,
+  // and the sidebar re-fetches, so no additional feedback is needed here.
   const handleRespond = async (inviteId, action) => {
     try {
       await api.patch(`/invitations/${inviteId}/respond`, { action })
       fetchPendingInvites()
       if (action === 'accepted') fetchContacts()
-      alert(`Invitation ${action}`)
     } catch (e) {
       alert(e.response?.data?.message || 'Failed to respond')
     }
@@ -140,7 +152,6 @@ export default function ChatLayout() {
     try {
       await api.delete(`/contacts/remove/${id}`)
       fetchContacts()
-      // If we are actively viewing the chat of the person we just removed, kick ourselves out too!
       if (activeUserId === id) {
         navigate('/chat')
       }
@@ -176,11 +187,8 @@ export default function ChatLayout() {
           </div>
 
           <div className="flex items-center gap-2 text-gray-600">
-            {/* INVITATIONS DROPDOWN */}
             <InvitationsDropdown pending={pendingReceived} onRespond={handleRespond} />
-
             <NotificationBell />
-            {/* New Group button */}
             <button
               id="new-group-button"
               onClick={() => setShowCreateGroup(true)}
@@ -191,7 +199,6 @@ export default function ChatLayout() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
               </svg>
             </button>
-            {/* Add contact / search toggle */}
             <button
               onClick={() => { setIsSearchMode(!isSearchMode); setQuery(''); setResults([]) }}
               className="p-2 rounded-full hover:bg-gray-200 transition"
@@ -260,7 +267,6 @@ export default function ChatLayout() {
         {/* List Area */}
         <div className="flex-1 overflow-y-auto bg-white">
           {isSearchMode ? (
-            /* Global Search Results */
             <div className="py-2">
               <h3 className="px-4 text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Global Search</h3>
               {loading && <p className="px-4 text-sm text-gray-500">Searching...</p>}
@@ -319,7 +325,6 @@ export default function ChatLayout() {
             </div>
 
           ) : tab === 'chats' ? (
-            /* Contacts / DMs */
             contacts.length === 0 ? (
               <div className="p-8 text-center text-gray-400 text-sm">
                 No chats yet. Click the + icon to find people.
@@ -351,7 +356,6 @@ export default function ChatLayout() {
             )
 
           ) : (
-            /* Groups Tab */
             groups.length === 0 ? (
               <div className="p-8 text-center text-gray-400 text-sm">
                 <p className="mb-3">No groups yet.</p>
@@ -399,7 +403,6 @@ export default function ChatLayout() {
         </div>
       )}
 
-      {/* Create Group Modal */}
       {showCreateGroup && (
         <CreateGroupModal
           onClose={() => setShowCreateGroup(false)}

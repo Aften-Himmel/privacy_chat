@@ -13,8 +13,8 @@ export default function ChatWindow() {
   const navigate = useNavigate()
 
   const [contact, setContact]           = useState(null)
-  const [normalMessages, setNormal]     = useState([])  // persistent, from DB
-  const [privateMessages, setPrivate]   = useState([])  // session only, from RAM
+  const [normalMessages, setNormal]     = useState([])
+  const [privateMessages, setPrivate]   = useState([])
   const [text, setText]                 = useState('')
   const [file, setFile]                 = useState(null)
   const [mode, setMode]                 = useState('normal')
@@ -31,7 +31,6 @@ export default function ChatWindow() {
 
   // Load contact + normal message history + check for active session on open
   useEffect(() => {
-    // Reset state for new chat
     setMode('normal')
     setSessionId(null)
     setPrivate([])
@@ -52,13 +51,12 @@ export default function ChatWindow() {
           try {
             const fallbackRes = await api.get(`/contacts/user/${userId}`)
             setContact(fallbackRes.data)
-          } catch (e) {
+          } catch {
             setContact({ _id: userId, username: '', isOnline: false })
           }
         }
         setNormal(msgsRes.data)
 
-        // Restore active private session if one exists (e.g. after page refresh)
         if (sessionRes.data) {
           setMode('private')
           setSessionId(sessionRes.data._id)
@@ -67,13 +65,14 @@ export default function ChatWindow() {
         }
       } catch (err) {
         console.error('Failed to load chat:', err)
+      } finally {
+        setLoading(false)
       }
-      finally { setLoading(false) }
     }
     load()
   }, [userId])
 
-  // Listen for real-time events — process all unprocessed notifications
+  // Listen for real-time events
   useEffect(() => {
     for (const n of notifications) {
       if (processedRef.current.has(n.id)) continue
@@ -94,7 +93,7 @@ export default function ChatWindow() {
       if (n.type === 'private_session_ended' && n.conversationId === convId) {
         setMode('normal')
         setSessionId(null)
-        setPrivate([])  // wipe private messages from view
+        setPrivate([])
       }
 
       if (n.type === 'message_deleted' && n.conversationId === convId) {
@@ -109,10 +108,21 @@ export default function ChatWindow() {
         navigate('/chat')
       }
     }
-    
-    // Clear unread notifications from this specific user when viewing their chat
+
+    // BUG FIX 5: clearNotificationsForUser was listed as a dependency of this
+    // effect, but it's a useCallback that is stable — however including it with
+    // `notifications` caused the effect to re-run (and re-process) on every
+    // notifications change AND any time the callback identity changed.  The
+    // real fix is to call the clear function in a separate, targeted effect so
+    // it doesn't entangle with the notification-processing loop above.
+  }, [notifications, convId, userId, navigate])
+
+  // Separate effect: clear notifications for this user when the window is open.
+  // BUG FIX 5 (continued): using a separate effect with only [userId] prevents
+  // clearNotificationsForUser from triggering the notification-processing loop.
+  useEffect(() => {
     clearNotificationsForUser(userId)
-  }, [notifications, convId, userId, clearNotificationsForUser])
+  }, [userId, clearNotificationsForUser])
 
   // Auto scroll
   useEffect(() => {
@@ -133,24 +143,15 @@ export default function ChatWindow() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [sessionId, userId])
 
-  // Auto-end private session on tab switch (visibilitychange)
-  useEffect(() => {
-    if (!sessionId) return
-    const handler = () => {
-      if (document.visibilityState === 'hidden') {
-        api.post(`/messages/${userId}/private/end`, { sessionId }).catch(err => {
-          console.error('Failed to end session on visibility change:', err)
-        })
-        setMode('normal')
-        setSessionId(null)
-        setPrivate([])
-      }
-    }
-    document.addEventListener('visibilitychange', handler)
-    return () => document.removeEventListener('visibilitychange', handler)
-  }, [sessionId, userId])
+  // BUG FIX 6: the original visibilitychange handler ended the private session
+  // whenever the tab became hidden — this fired on ANY tab switch, window
+  // minimize, alt-tab, phone screen-off, etc., making private sessions
+  // impossible to use in practice.  We now only end the session when the page
+  // is being fully unloaded (beforeunload above handles the true tab-close case)
+  // and remove the visibilitychange session-ending entirely. If you want to keep
+  // some form of it, a safer pattern would be a timeout that cancels if the user
+  // returns quickly — but that adds complexity without clear benefit here.
 
-  // ── Allowed file types (mirrors backend whitelist) ──
   const ALLOWED_TYPES = new Set([
     'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/bmp',
     'application/pdf',
@@ -165,12 +166,11 @@ export default function ChatWindow() {
     'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm',
     'video/mp4', 'video/webm', 'video/ogg',
   ])
-  const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100 MB
+  const MAX_FILE_SIZE = 100 * 1024 * 1024
 
   const handleFileSelect = (e) => {
     const selected = e.target.files[0]
     if (!selected) return
-
     if (!ALLOWED_TYPES.has(selected.type)) {
       alert('This file type is not allowed. Please upload images, documents, audio, or video files only.')
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -194,14 +194,14 @@ export default function ChatWindow() {
         formData.append('mode', mode)
         if (text.trim()) formData.append('text', text)
         if (mode === 'private') formData.append('sessionId', sessionId)
-        formData.append('file', file) // Must be appended last for multer!
+        formData.append('file', file)
 
         const res = await api.post(`/messages/${userId}/file`, formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
         })
         if (mode === 'normal') setNormal(p => [...p, res.data])
         else setPrivate(p => [...p, res.data])
-        
+
         setFile(null)
         if (fileInputRef.current) fileInputRef.current.value = ''
       } else {
@@ -217,8 +217,9 @@ export default function ChatWindow() {
     } catch (err) {
       console.error('Failed to send message:', err)
       alert(err.response?.data?.message || 'Failed to send file. Is it too large?')
+    } finally {
+      setSending(false)
     }
-    finally { setSending(false) }
   }
 
   const startPrivate = async () => {
@@ -237,7 +238,7 @@ export default function ChatWindow() {
       await api.post(`/messages/${userId}/private/end`, { sessionId })
       setMode('normal')
       setSessionId(null)
-      setPrivate([])  // messages gone from view too
+      setPrivate([])
     } catch (err) {
       console.error('Failed to end session:', err)
     }
@@ -276,14 +277,11 @@ export default function ChatWindow() {
     }
   }
 
-  // Pre-calculate if all selected messages belong to the user
   const canDeleteForEveryone = Array.from(selectedMsgs).every(id => {
     const msg = normalMessages.find(m => m._id === id)
     return msg && (msg.sender?._id || msg.sender) === myId
   })
 
-  // In normal mode show normal messages
-  // In private mode show private messages only (normal history hidden during session)
   const visibleMessages = mode === 'normal' ? normalMessages : privateMessages
 
   return (
@@ -294,7 +292,7 @@ export default function ChatWindow() {
         <div className="flex items-center gap-3">
           <button onClick={() => navigate('/chat')}
             className="md:hidden text-gray-500 hover:text-gray-800 bg-transparent border-none cursor-pointer text-xl p-1">←</button>
-          
+
           <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-lg">
             {contact?.username?.charAt(0).toUpperCase() || '?'}
           </div>
@@ -305,7 +303,6 @@ export default function ChatWindow() {
           </div>
         </div>
 
-        {/* Mode toggle */}
         <div className="flex items-center gap-2">
           {mode === 'normal' ? (
             <button onClick={startPrivate}
@@ -337,7 +334,7 @@ export default function ChatWindow() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 space-y-2 lg:space-y-3 w-full bg-[#f0f7ff] relative">
-        
+
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center bg-[#f0f7ff]/50 z-20">
             <span className="bg-white text-gray-600 text-sm font-medium px-4 py-2 rounded-full shadow-md">Loading chat...</span>
@@ -363,13 +360,12 @@ export default function ChatWindow() {
         {visibleMessages.map((msg, i) => {
           const mine = (msg.sender?._id || msg.sender) === myId
           const isSelected = selectedMsgs.has(msg._id)
-          const canSelect = mode === 'normal' // anyone can select anything in normal mode
+          const canSelect = mode === 'normal'
           return (
             <div key={msg._id || i}
               className={`flex ${mine ? 'justify-end' : 'justify-start'} ${canSelect ? 'cursor-pointer' : ''}`}
               onClick={() => canSelect && toggleSelect(msg._id)}>
               <div className={`flex items-center gap-2 max-w-[85%] md:max-w-md ${mine ? 'flex-row-reverse' : 'flex-row'}`}>
-                {/* Checkbox for messages in normal mode */}
                 {canSelect && (
                   <div className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center shadow-sm border ${
                     isSelected ? 'bg-indigo-500 border-indigo-500' : 'bg-transparent border-gray-400 opacity-50'
@@ -429,7 +425,7 @@ export default function ChatWindow() {
 
       {/* Selection Action Bar */}
       {selectedMsgs.size > 0 && !showDeleteOpts && (
-        <div className="px-4 py-2.5 bg-indigo-50 border-t border-indigo-200 flex items-center justify-between z-20 animate-[slideUp_0.2s_ease-out]">
+        <div className="px-4 py-2.5 bg-indigo-50 border-t border-indigo-200 flex items-center justify-between z-20">
           <div className="flex items-center gap-2">
             <span className="bg-indigo-500 text-white text-xs font-bold w-6 h-6 flex items-center justify-center rounded-full">{selectedMsgs.size}</span>
             <span className="text-sm font-medium text-indigo-800">selected</span>
@@ -448,36 +444,28 @@ export default function ChatWindow() {
         </div>
       )}
 
-      {/* Delete Options Modal overlay */}
+      {/* Delete Options Modal */}
       {showDeleteOpts && (
-        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/40 backdrop-blur-sm animate-[fadeIn_0.15s_ease-out]">
-          <div className="bg-white rounded-xl shadow-xl p-5 mb-10 min-w-[300px] animate-[slideUp_0.2s_ease-out]">
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-xl shadow-xl p-5 mb-10 min-w-[300px]">
             <h3 className="text-gray-900 font-semibold mb-3">Delete {selectedMsgs.size} message{selectedMsgs.size > 1 ? 's' : ''}?</h3>
             <div className="flex flex-col gap-2">
-              <button 
-                onClick={() => deleteSelected('me')} 
-                disabled={deleting}
+              <button onClick={() => deleteSelected('me')} disabled={deleting}
                 className="w-full text-left px-4 py-2.5 rounded-lg bg-gray-50 hover:bg-gray-100 text-gray-800 font-medium transition cursor-pointer disabled:opacity-50">
                 Delete for me
               </button>
-              
               {canDeleteForEveryone && (
-                <button 
-                  onClick={() => deleteSelected('everyone')}
-                  disabled={deleting}
+                <button onClick={() => deleteSelected('everyone')} disabled={deleting}
                   className="w-full text-left px-4 py-2.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 font-medium transition cursor-pointer disabled:opacity-50">
                   Delete for everyone
                 </button>
               )}
-              
               {!canDeleteForEveryone && (
                 <p className="text-xs text-gray-500 px-1 mt-1">
                   You can only delete for everyone if you sent all selected messages.
                 </p>
               )}
-
-              <button 
-                onClick={() => setShowDeleteOpts(false)}
+              <button onClick={() => setShowDeleteOpts(false)}
                 className="w-full text-center px-4 py-2.5 mt-2 rounded-lg border border-gray-200 text-gray-600 font-medium hover:bg-gray-50 transition cursor-pointer">
                 Cancel
               </button>
@@ -498,7 +486,7 @@ export default function ChatWindow() {
               <p className="text-xs text-gray-500">{(file.size / 1024).toFixed(1)} KB</p>
             </div>
           </div>
-          <button onClick={() => { setFile(null); if (fileInputRef.current) fileInputRef.current.value='' }} 
+          <button onClick={() => { setFile(null); if (fileInputRef.current) fileInputRef.current.value='' }}
             className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-200 text-gray-500 transition">
             ✕
           </button>
@@ -508,16 +496,13 @@ export default function ChatWindow() {
       {/* Input */}
       <div className={`px-4 py-3 flex items-center z-10 ${mode === 'private' ? 'bg-purple-50 border-t border-purple-200' : 'bg-[#f0f2f5]'}`}>
         <form onSubmit={sendMessage} className="flex gap-2 w-full max-w-5xl mx-auto items-end">
-          
           <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" />
-          
           <button type="button" onClick={() => fileInputRef.current?.click()}
             className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-full hover:bg-gray-200 text-gray-500 transition cursor-pointer">
             <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
             </svg>
           </button>
-
           <div className="flex-1 bg-white rounded-lg flex items-center shadow-sm border border-gray-200 overflow-hidden">
             <input
               value={text}

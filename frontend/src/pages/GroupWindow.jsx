@@ -3,6 +3,10 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useSocket } from '../context/SocketContext'
 import api from '../api/axios'
+// BUG FIX 7: GroupInfoPanel lives in pages/, not in the same directory.
+// The original import './GroupInfoPanel' would resolve correctly only if
+// GroupWindow.jsx is also in pages/ — which it is — so this was actually fine.
+// Confirmed: both files are in src/pages/, so the relative path is correct.
 import GroupInfoPanel from './GroupInfoPanel'
 
 export default function GroupWindow() {
@@ -30,7 +34,7 @@ export default function GroupWindow() {
 
   const myId = user?.id || user?._id
 
-  // ── Load group + messages + check active session ──
+  // Load group + messages + check active session
   useEffect(() => {
     setMode('normal')
     setSessionId(null)
@@ -64,7 +68,7 @@ export default function GroupWindow() {
     load()
   }, [groupId])
 
-  // ── Real-time notifications ──
+  // Real-time notifications
   useEffect(() => {
     for (const n of notifications) {
       if (processedRef.current.has(n.id)) continue
@@ -101,41 +105,41 @@ export default function GroupWindow() {
     }
   }, [notifications, groupId, navigate])
 
-  // ── Auto scroll ──
+  // Auto scroll
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [normalMessages, privateMessages])
 
-  // ── Tab-close beacon for private session ──
+  // BUG FIX 8: the beacon for group private session end was pointing at
+  // `/groups/${groupId}/private/end` — but that route requires an auth header
+  // which sendBeacon cannot send. The backend needs a dedicated no-auth beacon
+  // endpoint for groups (mirroring the one in messages.js for DMs). Until that
+  // backend endpoint is added, we use the authenticated API call in beforeunload
+  // via keepalive fetch, which does allow headers and is supported in modern browsers.
   useEffect(() => {
     if (!sessionId) return
     const handler = () => {
       const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
-      navigator.sendBeacon(
-        `${apiBase}/groups/${groupId}/private/end`,
-        new Blob([JSON.stringify({ sessionId })], { type: 'application/json' })
-      )
+      const token = localStorage.getItem('token')
+      // keepalive fetch supports headers (unlike sendBeacon) and survives page unload
+      fetch(`${apiBase}/groups/${groupId}/private/end`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ sessionId }),
+        keepalive: true,
+      }).catch(() => {})
     }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
   }, [sessionId, groupId])
 
-  // ── Visibility change: end private session on tab switch ──
-  useEffect(() => {
-    if (!sessionId) return
-    const handler = () => {
-      if (document.visibilityState === 'hidden') {
-        api.post(`/groups/${groupId}/private/end`, { sessionId }).catch(console.error)
-        setMode('normal')
-        setSessionId(null)
-        setPrivate([])
-      }
-    }
-    document.addEventListener('visibilitychange', handler)
-    return () => document.removeEventListener('visibilitychange', handler)
-  }, [sessionId, groupId])
+  // BUG FIX 9: removed the visibilitychange handler that ended the private
+  // session on every tab switch / window minimize — same issue as ChatWindow.
+  // The beforeunload + keepalive fetch above covers the true tab-close case.
 
-  // ── File handling ──
   const ALLOWED_TYPES = new Set([
     'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/bmp',
     'application/pdf', 'application/msword',
@@ -149,12 +153,11 @@ export default function GroupWindow() {
     'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm',
     'video/mp4', 'video/webm', 'video/ogg',
   ])
-  const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100 MB
+  const MAX_FILE_SIZE = 100 * 1024 * 1024
 
   const handleFileSelect = (e) => {
     const selected = e.target.files[0]
     if (!selected) return
-
     if (!ALLOWED_TYPES.has(selected.type)) {
       alert('This file type is not allowed. Please upload images, documents, audio, or video files only.')
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -168,7 +171,6 @@ export default function GroupWindow() {
     setFile(selected)
   }
 
-  // ── Send message or file ──
   const sendMessage = async (e) => {
     e.preventDefault()
     if ((!text.trim() && !file) || sending) return
@@ -207,7 +209,6 @@ export default function GroupWindow() {
     }
   }
 
-  // ── Private session controls ──
   const isAdmin = group?.admins?.some(a => (a._id || a).toString() === myId)
 
   const startPrivate = async () => {
@@ -232,7 +233,6 @@ export default function GroupWindow() {
     }
   }
 
-  // ── Message selection + deletion ──
   const toggleSelect = (msgId) => {
     setSelectedMsgs(prev => {
       const next = new Set(prev)
@@ -293,7 +293,6 @@ export default function GroupWindow() {
           </button>
         </div>
 
-        {/* Mode toggle — only admins can start/end private sessions */}
         <div className="flex items-center gap-2">
           {isAdmin && mode === 'normal' ? (
             <button onClick={startPrivate}
@@ -362,14 +361,11 @@ export default function GroupWindow() {
               className={`flex ${mine ? 'justify-end' : 'justify-start'} ${canSelect ? 'cursor-pointer' : ''}`}
               onClick={() => canSelect && toggleSelect(msg._id)}>
               <div className={`flex items-end gap-2 max-w-[85%] md:max-w-md ${mine ? 'flex-row-reverse' : 'flex-row'}`}>
-                {/* Avatar (others only) */}
                 {!mine && (
                   <div className="w-7 h-7 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs flex-shrink-0 mb-1">
                     {senderName.charAt(0).toUpperCase()}
                   </div>
                 )}
-
-                {/* Checkbox */}
                 {canSelect && (
                   <div className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center shadow-sm border ${
                     isSelected ? 'bg-indigo-500 border-indigo-500' : 'bg-transparent border-gray-400 opacity-50'
@@ -377,7 +373,6 @@ export default function GroupWindow() {
                     {isSelected && <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" /></svg>}
                   </div>
                 )}
-
                 <div className={`px-3 py-1.5 rounded-lg text-[15px] shadow-sm relative transition-all ${
                   isSelected ? 'ring-2 ring-indigo-400 bg-indigo-50 opacity-90' :
                   mine
@@ -388,11 +383,9 @@ export default function GroupWindow() {
                       ? 'bg-white text-gray-900 border border-purple-200'
                       : 'bg-white text-gray-900 border border-gray-100'
                 }`}>
-                  {/* Sender name for group chat */}
                   {!mine && (
                     <p className="text-xs font-semibold text-emerald-600 mb-0.5">{senderName}</p>
                   )}
-
                   {msg.fileUrl && (
                     <div className="mb-1 mt-1">
                       {msg.fileType?.startsWith('image/') ? (
@@ -416,9 +409,7 @@ export default function GroupWindow() {
                       )}
                     </div>
                   )}
-
                   {msg.text && <p className="leading-snug pr-12 text-gray-800 break-words">{msg.text}</p>}
-
                   <div className="absolute right-2 bottom-1 flex items-center gap-1">
                     <span className="text-[10px] text-gray-500 whitespace-nowrap">
                       {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -514,7 +505,6 @@ export default function GroupWindow() {
               <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
             </svg>
           </button>
-
           <div className="flex-1 bg-white rounded-lg flex items-center shadow-sm border border-gray-200 overflow-hidden">
             <input
               value={text}
@@ -533,7 +523,6 @@ export default function GroupWindow() {
               </span>
             )}
           </div>
-
           <button type="submit" disabled={sending || (!text.trim() && !file) || text.length > 500}
             className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-full bg-emerald-500 hover:bg-emerald-600 transition disabled:opacity-50 disabled:bg-emerald-300 cursor-pointer shadow-sm ml-1">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="white">
@@ -543,7 +532,7 @@ export default function GroupWindow() {
         </form>
       </div>
 
-      {/* Group Info Panel (slide-in) */}
+      {/* Group Info Panel */}
       {showInfo && group && (
         <GroupInfoPanel
           group={group}

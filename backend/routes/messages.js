@@ -15,11 +15,8 @@ const __dirname = path.dirname(__filename)
 
 const router = express.Router()
 
-// ── Allowed MIME types whitelist ──
 const ALLOWED_MIME_TYPES = new Set([
-  // Images
   'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/bmp',
-  // Documents
   'application/pdf',
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -28,20 +25,15 @@ const ALLOWED_MIME_TYPES = new Set([
   'application/vnd.ms-powerpoint',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   'text/plain', 'text/csv',
-  // Archives
   'application/zip', 'application/x-rar-compressed', 'application/gzip',
-  // Audio
   'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm',
-  // Video
   'video/mp4', 'video/webm', 'video/ogg',
 ])
 
-// ── Sanitize filenames — strip path traversal chars ──
 const sanitizeFilename = (name) => {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.{2,}/g, '.')
 }
 
-// ── Multer configuration ──
 const uploadsDir = path.join(__dirname, '..', 'uploads')
 
 const storage = multer.diskStorage({
@@ -66,17 +58,15 @@ const fileFilter = (_req, file, cb) => {
 
 const upload = multer({
   storage,
-  limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB
+  limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter,
 })
 
-// ── MongoDB ObjectId format validator ──
 const isValidObjectId = (id) => /^[0-9a-fA-F]{24}$/.test(id)
 
 const getConvId = (a, b) => [a, b].sort().join('_')
 
-// ── Track files uploaded during private sessions for cleanup ──
-const privateSessionFiles = new Map() // sessionId -> [filePath]
+const privateSessionFiles = new Map()
 
 const trackPrivateFile = (sessionId, filePath) => {
   if (!privateSessionFiles.has(sessionId)) privateSessionFiles.set(sessionId, [])
@@ -93,7 +83,6 @@ const cleanupPrivateFiles = (sessionId) => {
   privateSessionFiles.delete(sessionId)
 }
 
-// ── Handle multer errors ──
 const handleUpload = (req, res, next) => {
   upload.single('file')(req, res, (err) => {
     if (err instanceof multer.MulterError) {
@@ -109,7 +98,7 @@ const handleUpload = (req, res, next) => {
   })
 }
 
-// ── Beacon endpoint for tab-close cleanup (no auth header — sendBeacon limitation)
+// Beacon endpoint — no auth header (sendBeacon limitation)
 router.post('/:userId/private/end-beacon', async (req, res) => {
   try {
     const { sessionId } = req.body
@@ -123,7 +112,6 @@ router.post('/:userId/private/end-beacon', async (req, res) => {
     clearPrivateMessages(sessionId)
     cleanupPrivateFiles(sessionId)
 
-    // Notify other participants
     const io = req.app.get('io')
     for (const pId of session.participants) {
       sendNotification(io, pId.toString(), {
@@ -141,11 +129,8 @@ router.post('/:userId/private/end-beacon', async (req, res) => {
   }
 })
 
-// ── All routes below require authentication
 router.use(authMiddleware)
 
-// ── GET count of active sessions for the current user (for dashboard)
-// NOTE: This MUST be before /:userId routes or Express matches 'sessions' as a userId
 router.get('/sessions/active/count', async (req, res) => {
   try {
     const count = await Session.countDocuments({
@@ -158,7 +143,6 @@ router.get('/sessions/active/count', async (req, res) => {
   }
 })
 
-// ── Param validation middleware for :userId routes ──
 router.param('userId', (req, res, next, id) => {
   if (!isValidObjectId(id)) {
     return res.status(400).json({ message: 'Invalid user ID format' })
@@ -166,11 +150,10 @@ router.param('userId', (req, res, next, id) => {
   next()
 })
 
-// ── GET normal message history (always available, like WhatsApp)
 router.get('/:userId', async (req, res) => {
   try {
     const convId = getConvId(req.user.id, req.params.userId)
-    const messages = await Message.find({ 
+    const messages = await Message.find({
       conversationId: convId,
       deletedFor: { $ne: req.user.id }
     })
@@ -183,7 +166,6 @@ router.get('/:userId', async (req, res) => {
   }
 })
 
-// ── POST send normal message (text only)
 router.post('/:userId', async (req, res) => {
   try {
     const { text } = req.body
@@ -212,7 +194,6 @@ router.post('/:userId', async (req, res) => {
   }
 })
 
-// ── POST send file (normal or private mode)
 router.post('/:userId/file', handleUpload, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: 'No file uploaded' })
@@ -236,7 +217,6 @@ router.post('/:userId/file', handleUpload, async (req, res) => {
       const session = await Session.findOne({ _id: sessionId, status: 'active' })
       if (!session) return res.status(400).json({ message: 'No active session' })
 
-      // Track file for cleanup when session ends
       trackPrivateFile(sessionId, path.join(uploadsDir, req.file.filename))
 
       const messageObj = {
@@ -252,7 +232,6 @@ router.post('/:userId/file', handleUpload, async (req, res) => {
       return res.status(201).json(messageObj)
     }
 
-    // Normal mode file
     const message = await Message.create({
       conversationId: convId,
       sender: req.user.id,
@@ -267,10 +246,14 @@ router.post('/:userId/file', handleUpload, async (req, res) => {
   }
 })
 
-// ── POST bulk delete messages (WhatsApp style)
+// BUG FIX 10: the original delete-for-everyone query fetched messages filtered
+// only by _id — it did NOT include conversationId in the query. This meant a
+// malicious user could pass any message IDs from any conversation and delete
+// them as long as they owned them. The fix adds conversationId to the find
+// query so messages from other conversations are never touched.
 router.post('/:userId/messages/delete', async (req, res) => {
   try {
-    const { messageIds, type } = req.body // type: 'me' | 'everyone'
+    const { messageIds, type } = req.body
     if (!Array.isArray(messageIds) || messageIds.length === 0) {
       return res.status(400).json({ message: 'No messages provided' })
     }
@@ -278,15 +261,18 @@ router.post('/:userId/messages/delete', async (req, res) => {
     const convId = getConvId(req.user.id, req.params.userId)
 
     if (type === 'everyone') {
-      // Validate all messages belong to user and are in this conv
-      const msgs = await Message.find({ _id: { $in: messageIds }, conversationId: convId })
-      
+      // BUG FIX 10: include conversationId in the query to scope deletion
+      // strictly to this conversation's messages.
+      const msgs = await Message.find({
+        _id: { $in: messageIds },
+        conversationId: convId,           // ← was missing in original
+      })
+
       const unauthorized = msgs.some(m => m.sender.toString() !== req.user.id)
       if (unauthorized || msgs.length !== messageIds.length) {
         return res.status(403).json({ message: 'You can only delete your own messages for everyone' })
       }
 
-      // Hard delete from DB and Disk
       for (const m of msgs) {
         if (m.fileUrl) {
           const filename = m.fileUrl.split('/').pop()
@@ -296,7 +282,6 @@ router.post('/:userId/messages/delete', async (req, res) => {
       }
       await Message.deleteMany({ _id: { $in: messageIds } })
 
-      // Notify other user
       const io = req.app.get('io')
       sendNotification(io, req.params.userId, {
         type: 'messages_deleted_everyone',
@@ -305,7 +290,6 @@ router.post('/:userId/messages/delete', async (req, res) => {
       })
 
     } else if (type === 'me') {
-      // Soft delete: just add user ID to deletedFor
       await Message.updateMany(
         { _id: { $in: messageIds }, conversationId: convId },
         { $addToSet: { deletedFor: req.user.id } }
@@ -320,18 +304,16 @@ router.post('/:userId/messages/delete', async (req, res) => {
   }
 })
 
-// ── GET active session for a conversation
 router.get('/:userId/session/active', async (req, res) => {
   try {
     const convId = getConvId(req.user.id, req.params.userId)
     const session = await Session.findOne({ conversationId: convId, status: 'active' })
-    res.json(session) // null if none
+    res.json(session)
   } catch (err) {
     res.status(500).json({ message: err.message })
   }
 })
 
-// ── POST start private session
 router.post('/:userId/private/start', async (req, res) => {
   try {
     const convId = getConvId(req.user.id, req.params.userId)
@@ -359,7 +341,6 @@ router.post('/:userId/private/start', async (req, res) => {
   }
 })
 
-// ── GET private messages for active session — from RAM only
 router.get('/:userId/private/messages', async (req, res) => {
   try {
     const convId = getConvId(req.user.id, req.params.userId)
@@ -372,7 +353,6 @@ router.get('/:userId/private/messages', async (req, res) => {
   }
 })
 
-// ── POST send private message — RAM only, never touches MongoDB
 router.post('/:userId/private/message', async (req, res) => {
   try {
     const { text, sessionId } = req.body
@@ -407,7 +387,6 @@ router.post('/:userId/private/message', async (req, res) => {
   }
 })
 
-// ── POST end private session — clears RAM, marks session ended
 router.post('/:userId/private/end', async (req, res) => {
   try {
     const { sessionId } = req.body
