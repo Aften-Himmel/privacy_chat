@@ -5,18 +5,34 @@ import api from '../api/axios'
 
 export default function Register() {
   const [form, setForm] = useState({ username: '', email: '', password: '' })
+  const [code, setCode] = useState('')
+  const [isVerifying, setIsVerifying] = useState(false)
   const [error, setError] = useState('')
+  const [successMsg, setSuccessMsg] = useState('')
   const [loading, setLoading] = useState(false)
   const { login } = useAuth()
   const navigate = useNavigate()
 
   const onChange = e => setForm(p => ({ ...p, [e.target.name]: e.target.value }))
 
-  const onSubmit = async e => {
+  const handleSendCode = async e => {
     e.preventDefault()
-    setError(''); setLoading(true)
+    setError(''); setSuccessMsg(''); setLoading(true)
     try {
-      const res = await api.post('/auth/register', form)
+      const res = await api.post('/auth/send-code', form)
+      setSuccessMsg(res.data.message || 'Verification code sent to your email.')
+      setIsVerifying(true)
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to send verification code')
+    } finally { setLoading(false) }
+  }
+
+  const handleRegister = async e => {
+    e.preventDefault()
+    setError(''); setSuccessMsg(''); setLoading(true)
+    try {
+      const payload = { ...form, code }
+      const res = await api.post('/auth/register', payload)
       login(res.data.user, res.data.token)
       navigate('/chat')
     } catch (err) {
@@ -41,31 +57,52 @@ export default function Register() {
           <h2 className="text-lg font-semibold text-gray-800 mb-4 text-center">Create account</h2>
 
           {error && <p className="text-red-600 text-sm bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-4 text-center">{error}</p>}
+          {successMsg && <p className="text-green-600 text-sm bg-green-50 border border-green-200 rounded-lg px-3 py-2 mb-4 text-center">{successMsg}</p>}
 
-          <form onSubmit={onSubmit} className="space-y-3">
-            <div>
-              <label className="text-sm text-gray-600 font-medium block mb-1">Username</label>
-              <input name="username" type="text" required value={form.username} onChange={onChange}
-                placeholder="john_doe"
-                className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-gray-900 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition" />
-            </div>
-            <div>
-              <label className="text-sm text-gray-600 font-medium block mb-1">Email</label>
-              <input name="email" type="email" required value={form.email} onChange={onChange}
-                placeholder="you@example.com"
-                className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-gray-900 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition" />
-            </div>
-            <div>
-              <label className="text-sm text-gray-600 font-medium block mb-1">Password</label>
-              <input name="password" type="password" required value={form.password} onChange={onChange}
-                placeholder="Min. 6 characters"
-                className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-gray-900 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition" />
-            </div>
-            <button type="submit" disabled={loading}
-              className="w-full bg-blue-500 hover:bg-blue-600 focus:bg-blue-700 text-white font-semibold py-2 rounded-lg text-sm mt-2 shadow-sm disabled:opacity-50 transition cursor-pointer">
-              {loading ? 'Creating...' : 'Create Account'}
-            </button>
-          </form>
+          {!isVerifying ? (
+            <form onSubmit={handleSendCode} className="space-y-3">
+              <div>
+                <label className="text-sm text-gray-600 font-medium block mb-1">Username</label>
+                <input name="username" type="text" required value={form.username} onChange={onChange}
+                  placeholder="john_doe"
+                  className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-gray-900 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition" />
+              </div>
+              <div>
+                <label className="text-sm text-gray-600 font-medium block mb-1">Email</label>
+                <input name="email" type="email" required value={form.email} onChange={onChange}
+                  placeholder="you@example.com"
+                  className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-gray-900 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition" />
+              </div>
+              <div>
+                <label className="text-sm text-gray-600 font-medium block mb-1">Password</label>
+                <input name="password" type="password" required value={form.password} onChange={onChange}
+                  placeholder="Min. 6 characters"
+                  className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-gray-900 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition" />
+              </div>
+              <button type="submit" disabled={loading}
+                className="w-full bg-blue-500 hover:bg-blue-600 focus:bg-blue-700 text-white font-semibold py-2 rounded-lg text-sm mt-2 shadow-sm disabled:opacity-50 transition cursor-pointer">
+                {loading ? 'Sending Code...' : 'Continue'}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleRegister} className="space-y-3">
+              <div>
+                <label className="text-sm text-gray-600 font-medium block mb-1">Verification Code</label>
+                <input name="code" type="text" required value={code} onChange={e => setCode(e.target.value)}
+                  placeholder="Enter 6-digit code" maxLength="6"
+                  className="w-full bg-gray-50 border border-gray-300 rounded-lg px-3 py-2 text-center tracking-widest text-xl text-gray-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition" />
+                <p className="text-xs text-gray-500 mt-2 text-center">We sent a verification code to <strong>{form.email}</strong></p>
+              </div>
+              <button type="submit" disabled={loading || code.length !== 6}
+                className="w-full bg-blue-500 hover:bg-blue-600 focus:bg-blue-700 text-white font-semibold py-2 rounded-lg text-sm mt-2 shadow-sm disabled:opacity-50 transition cursor-pointer">
+                {loading ? 'Verifying...' : 'Verify & Create Account'}
+              </button>
+              <button type="button" onClick={() => setIsVerifying(false)} disabled={loading}
+                className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold py-2 rounded-lg text-sm mt-2 shadow-sm disabled:opacity-50 transition cursor-pointer">
+                Back
+              </button>
+            </form>
+          )}
 
           <p className="text-center text-gray-500 text-sm mt-6">
             Have an account? <Link to="/login" className="text-blue-500 hover:text-blue-600 hover:underline font-medium">Sign in</Link>

@@ -35,6 +35,7 @@ router.post('/send', async (req, res) => {
 
     res.status(201).json({ message: 'Invitation sent', invitation: populated })
   } catch (err) {
+    console.error('🔥 POST /send ERROR:', err)
     res.status(500).json({ message: 'Server error', error: err.message })
   }
 })
@@ -71,6 +72,15 @@ router.patch('/:inviteId/respond', async (req, res) => {
 
     invitation.status = action
     await invitation.save()
+
+    // If accepted, add mutual contacts regardless of whether it's contact_request or normal
+    if (action === 'accepted') {
+      const fromId = invitation.from._id ? invitation.from._id.toString() : invitation.from
+      const toId = invitation.to._id ? invitation.to._id.toString() : invitation.to
+
+      await User.findByIdAndUpdate(fromId, { $addToSet: { contacts: toId } })
+      await User.findByIdAndUpdate(toId, { $addToSet: { contacts: fromId } })
+    }
 
     const io = req.app.get('io')
 

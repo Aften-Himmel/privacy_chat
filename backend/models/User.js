@@ -40,5 +40,22 @@ const userSchema = new mongoose.Schema(
   { timestamps: true }
 )
 
+// Cascading delete: when a user is deleted, remove them from other users' contacts
+userSchema.post('findOneAndDelete', async function(doc) {
+  if (doc) {
+    await mongoose.model('User').updateMany(
+      { contacts: doc._id },
+      { $pull: { contacts: doc._id } }
+    )
+  }
+})
+
+userSchema.post('deleteOne', { document: true, query: false }, async function() {
+  await mongoose.model('User').updateMany(
+    { contacts: this._id },
+    { $pull: { contacts: this._id } }
+  )
+})
+
 const User = mongoose.model('User', userSchema)
 export default User

@@ -1,6 +1,17 @@
 import express from 'express'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import User from '../models/User.js'
+import Message from '../models/Message.js'
 import authMiddleware from '../middleware/auth.js'
+import { sendNotification } from '../socket/socketManager.js'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const uploadsDir = path.join(__dirname, '..', 'uploads')
+
+const getConvId = (a, b) => [a.toString(), b.toString()].sort().join('_')
 
 const router = express.Router()
 
@@ -31,6 +42,17 @@ router.get('/search', async (req, res) => {
   }
 })
 
+// ─── GET USER INFO (Fallback) ────────────────────────────
+router.get('/user/:id', async (req, res) => {
+  try {
+    const u = await User.findById(req.params.id).select('username isOnline')
+    if (u) res.json(u)
+    else res.status(404).json({ message: 'Not found' })
+  } catch (err) {
+    res.status(500).json({ message: 'Server error' })
+  }
+})
+
 // ─── GET MY CONTACTS ─────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
@@ -43,46 +65,18 @@ router.get('/', async (req, res) => {
   }
 })
 
-// ─── ADD CONTACT ─────────────────────────────────────────
+// ─── ADD CONTACT (DISABLED: Use Invitations API instead) ───
 router.post('/add/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params
-
-    if (userId === req.user.id) {
-      return res.status(400).json({ message: 'You cannot add yourself' })
-    }
-
-    // Check the user to add actually exists
-    const userToAdd = await User.findById(userId)
-    if (!userToAdd) {
-      return res.status(404).json({ message: 'User not found' })
-    }
-
-    const currentUser = await User.findById(req.user.id)
-
-    // Check if already a contact
-    if (currentUser.contacts.includes(userId)) {
-      return res.status(400).json({ message: 'Already in your contacts' })
-    }
-
-    // Add to both users' contact lists (mutual friendship)
-    await User.findByIdAndUpdate(req.user.id, {
-      $push: { contacts: userId }
-    })
-    await User.findByIdAndUpdate(userId, {
-      $push: { contacts: req.user.id }
-    })
-
-    res.json({ message: 'Contact added successfully' })
-  } catch (err) {
-    res.status(500).json({ message: 'Server error', error: err.message })
-  }
+  res.status(400).json({ message: 'Direct addition disabled. Please refresh your browser Page to use the new Invite system.' })
 })
 
 // ─── REMOVE CONTACT ──────────────────────────────────────
 router.delete('/remove/:userId', async (req, res) => {
   try {
     const { userId } = req.params
+
+    // Get remover's name first for the notification
+    const remover = await User.findById(req.user.id).select('username')
 
     // Remove from both sides
     await User.findByIdAndUpdate(req.user.id, {
@@ -91,6 +85,27 @@ router.delete('/remove/:userId', async (req, res) => {
     await User.findByIdAndUpdate(userId, {
       $pull: { contacts: req.user.id }
     })
+
+    // Wipe all mutual chat history and files
+    const convId = getConvId(req.user.id, userId)
+    const msgs = await Message.find({ conversationId: convId })
+    for (const m of msgs) {
+      if (m.fileUrl) {
+        const filename = m.fileUrl.split('/').pop()
+        const filePath = path.join(uploadsDir, filename)
+        fs.unlink(filePath, () => {})
+      }
+    }
+    await Message.deleteMany({ conversationId: convId })
+
+    const io = req.app.get('io')
+    if (io && remover) {
+      sendNotification(io, userId, {
+        type: 'contact_removed',
+        removedBy: req.user.id,
+        removerName: remover.username
+      })
+    }
 
     res.json({ message: 'Contact removed' })
   } catch (err) {

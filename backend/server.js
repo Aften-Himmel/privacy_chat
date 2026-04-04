@@ -10,6 +10,8 @@ import fs from 'fs'
 import { fileURLToPath } from 'url'
 import authRoutes       from './routes/auth.js'
 import contactRoutes    from './routes/contacts.js'
+import groupRoutes      from './routes/groups.js'
+import invitationRoutes from './routes/invitations.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -45,6 +47,8 @@ app.use('/uploads', express.static(uploadsDir))
 // Routes
 app.use('/api/auth',        authRoutes)
 app.use('/api/contacts',    contactRoutes)
+app.use('/api/groups',      groupRoutes)
+app.use('/api/invitations', invitationRoutes)
 
 app.use('/api/messages', messageRoutes)
 

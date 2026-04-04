@@ -6,6 +6,7 @@ import Login from './pages/Login'
 import Register from './pages/Register'
 import ChatLayout from './components/ChatLayout'
 import ChatWindow from './pages/ChatWindow'
+import GroupWindow from './pages/GroupWindow'
 import EmptyChat from './pages/EmptyChat'
 
 export default function App() {
@@ -20,6 +21,7 @@ export default function App() {
             <Route path="/chat" element={<ProtectedRoute><ChatLayout /></ProtectedRoute>}>
               <Route index element={<EmptyChat />} />
               <Route path=":userId" element={<ChatWindow />} />
+              <Route path="group/:groupId" element={<GroupWindow />} />
             </Route>
           </Routes>
         </SocketProvider>

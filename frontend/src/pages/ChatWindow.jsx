@@ -46,7 +46,16 @@ export default function ChatWindow() {
           api.get(`/messages/${userId}/session/active`),
         ])
         const found = contactsRes.data.find(c => c._id === userId)
-        setContact(found)
+        if (found) {
+          setContact(found)
+        } else {
+          try {
+            const fallbackRes = await api.get(`/contacts/user/${userId}`)
+            setContact(fallbackRes.data)
+          } catch (e) {
+            setContact({ _id: userId, username: '', isOnline: false })
+          }
+        }
         setNormal(msgsRes.data)
 
         // Restore active private session if one exists (e.g. after page refresh)
@@ -94,6 +103,10 @@ export default function ChatWindow() {
 
       if (n.type === 'messages_deleted_everyone' && n.conversationId === convId) {
         setNormal(p => p.filter(m => !n.messageIds.includes(m._id || m.id)))
+      }
+
+      if (n.type === 'contact_removed' && n.removedBy === userId) {
+        navigate('/chat')
       }
     }
     
@@ -152,7 +165,7 @@ export default function ChatWindow() {
     'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm',
     'video/mp4', 'video/webm', 'video/ogg',
   ])
-  const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50 MB
+  const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100 MB
 
   const handleFileSelect = (e) => {
     const selected = e.target.files[0]
@@ -164,7 +177,7 @@ export default function ChatWindow() {
       return
     }
     if (selected.size > MAX_FILE_SIZE) {
-      alert('File is too large. Maximum size is 50 MB.')
+      alert('File is too large. Maximum size is 100 MB.')
       if (fileInputRef.current) fileInputRef.current.value = ''
       return
     }
@@ -287,7 +300,7 @@ export default function ChatWindow() {
           </div>
 
           <div>
-            <p className="text-gray-900 font-medium text-base">{contact?.username || 'Loading...'}</p>
+            <p className="text-gray-900 font-medium text-base">{contact?.username || ''}</p>
             <p className="text-gray-500 text-xs">{contact?.isOnline ? 'Online' : 'Offline'}</p>
           </div>
         </div>
@@ -323,11 +336,11 @@ export default function ChatWindow() {
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 space-y-2 lg:space-y-3 w-full bg-[#f0f7ff]">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 space-y-2 lg:space-y-3 w-full bg-[#f0f7ff] relative">
         
         {loading && (
-          <div className="flex justify-center py-4">
-            <span className="bg-white/80 text-gray-500 text-xs px-3 py-1 rounded-full shadow-sm">Loading...</span>
+          <div className="absolute inset-0 flex items-center justify-center bg-[#f0f7ff]/50 z-20">
+            <span className="bg-white text-gray-600 text-sm font-medium px-4 py-2 rounded-full shadow-md">Loading chat...</span>
           </div>
         )}
 
@@ -509,6 +522,7 @@ export default function ChatWindow() {
             <input
               value={text}
               onChange={e => setText(e.target.value)}
+              maxLength={500}
               placeholder={mode === 'private' ? '🔒 Type a private message...' : 'Type a message'}
               className={`w-full px-4 py-3 text-[15px] outline-none ${
                 mode === 'private'
@@ -516,8 +530,13 @@ export default function ChatWindow() {
                   : 'text-gray-800 placeholder-gray-400'
               }`}
             />
+            {text.length > 400 && (
+              <span className={`text-[10px] pr-3 transition-colors ${text.length >= 500 ? 'text-red-500 font-bold' : 'text-gray-400'}`}>
+                {text.length}/500
+              </span>
+            )}
           </div>
-          <button type="submit" disabled={sending || (!text.trim() && !file)}
+          <button type="submit" disabled={sending || (!text.trim() && !file) || text.length > 500}
             className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-full bg-blue-500 hover:bg-blue-600 focus:bg-blue-600 transition disabled:opacity-50 disabled:bg-blue-300 cursor-pointer shadow-sm ml-1">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="white">
               <path d="M1.101 21.757 23.8 12.028 1.101 2.3l.011 7.912 13.623 1.816-13.623 1.817-.011 7.912z"></path>

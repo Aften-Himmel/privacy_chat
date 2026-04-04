@@ -19,7 +19,7 @@ const invitationSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ['normal', 'private'],
+      enum: ['normal', 'private', 'contact_request'],
       default: 'normal',
     },
   },

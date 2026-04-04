@@ -1,12 +1,17 @@
 import { useState, useRef, useEffect } from 'react'
 import { useSocket } from '../context/SocketContext'
 import { useNavigate } from 'react-router-dom'
+import api from '../api/axios'
 
 export default function NotificationBell() {
-  const { notifications, markAllRead, clearNotification } = useSocket()
+  const { notifications: allNots, markAllRead, clearNotification } = useSocket()
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
   const navigate = useNavigate()
+
+  // Exclude invitation events from this generic bell (they have their own dropdown)
+  const notifications = allNots.filter(n => n.type !== 'invitation' && n.type !== 'invitation_response')
+  
   const unread = notifications.filter(n => !n.read).length
 
   useEffect(() => {
@@ -21,6 +26,16 @@ export default function NotificationBell() {
     clearNotification(n.id)
     setOpen(false)
     if (userId) navigate(`/chat/${userId}`)
+  }
+
+  const respondToInvite = async (n, action) => {
+    try {
+      await api.patch(`/invitations/${n.invitation._id}/respond`, { action })
+      clearNotification(n.id)
+      setOpen(false)
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to respond to invitation')
+    }
   }
 
   const renderNotificationText = (n) => {
@@ -43,6 +58,10 @@ export default function NotificationBell() {
 
     if (n.type === 'private_session_ended') {
       return 'A private session has ended'
+    }
+
+    if (n.type === 'contact_removed') {
+      return `❌ ${n.removerName || 'A user'} removed you from their contact list and deleted mutual chats`
     }
 
     return 'New notification'

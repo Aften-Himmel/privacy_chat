@@ -66,7 +66,7 @@ const fileFilter = (_req, file, cb) => {
 
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB
   fileFilter,
 })
 
@@ -98,7 +98,7 @@ const handleUpload = (req, res, next) => {
   upload.single('file')(req, res, (err) => {
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(413).json({ message: 'File too large. Maximum size is 50 MB.' })
+        return res.status(413).json({ message: 'File too large. Maximum size is 100 MB.' })
       }
       return res.status(400).json({ message: err.message })
     }
@@ -188,6 +188,7 @@ router.post('/:userId', async (req, res) => {
   try {
     const { text } = req.body
     if (!text || !text.trim()) return res.status(400).json({ message: 'Message text is required' })
+    if (text.length > 500) return res.status(400).json({ message: 'Message exceeds 500 characters limit' })
 
     const convId = getConvId(req.user.id, req.params.userId)
 
@@ -216,6 +217,7 @@ router.post('/:userId/file', handleUpload, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: 'No file uploaded' })
     const { mode, sessionId, text } = req.body
+    if (text && text.length > 500) return res.status(400).json({ message: 'Message exceeds 500 characters limit' })
 
     const serverUrl = process.env.SERVER_URL || 'http://localhost:5000'
     const fileUrl = `${serverUrl}/uploads/${req.file.filename}`
@@ -375,6 +377,7 @@ router.post('/:userId/private/message', async (req, res) => {
   try {
     const { text, sessionId } = req.body
     if (!text || !text.trim()) return res.status(400).json({ message: 'Message text is required' })
+    if (text.length > 500) return res.status(400).json({ message: 'Message exceeds 500 characters limit' })
 
     const session = await Session.findOne({ _id: sessionId, status: 'active' })
     if (!session) return res.status(400).json({ message: 'No active session' })
