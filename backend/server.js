@@ -62,6 +62,39 @@ app.use('/api/invitations', invitationRoutes)
 
 app.use('/api/messages', messageRoutes)
 
+// ── Email health-check (temporary diagnostic) ──
+app.get('/api/health/email', async (req, res) => {
+  try {
+    const nodemailer = await import('nodemailer')
+    const config = {
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT) || 587,
+      secure: process.env.SMTP_SECURE === 'true',
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS ? '***SET***' : '***MISSING***',
+      },
+    }
+    console.log('📧 Email health check — config:', config)
+
+    if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      return res.status(500).json({ status: 'FAIL', reason: 'SMTP env vars missing', config })
+    }
+
+    const transporter = nodemailer.default.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT) || 587,
+      secure: process.env.SMTP_SECURE === 'true',
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    })
+    await transporter.verify()
+    res.json({ status: 'OK', message: 'SMTP connection verified', config })
+  } catch (err) {
+    console.error('❌ Email health check failed:', err.message)
+    res.status(500).json({ status: 'FAIL', error: err.message, code: err.code })
+  }
+})
+
 app.get('/', (req, res) => res.json({ message: 'Privacy Chat Server running!' }))
 
 // Setup socket handlers

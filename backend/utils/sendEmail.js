@@ -2,8 +2,16 @@ import nodemailer from 'nodemailer'
 
 async function createTransporter() {
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-    // Use real SMTP if provided in .env
-    return nodemailer.createTransport({
+    console.log('📧 Creating SMTP transporter with:', {
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT) || 587,
+      secure: process.env.SMTP_SECURE === 'true',
+      user: process.env.SMTP_USER,
+      // Don't log the password, just confirm it exists
+      passSet: !!process.env.SMTP_PASS,
+    })
+
+    const transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST,
       port: Number(process.env.SMTP_PORT) || 587,
       secure: process.env.SMTP_SECURE === 'true',
@@ -12,8 +20,21 @@ async function createTransporter() {
         pass: process.env.SMTP_PASS,
       },
     })
+
+    // Verify the SMTP connection works
+    try {
+      await transporter.verify()
+      console.log('✅ SMTP connection verified successfully')
+    } catch (verifyErr) {
+      console.error('❌ SMTP connection verification FAILED:', verifyErr.message)
+      throw verifyErr
+    }
+
+    return transporter
   } else {
-    // Fall back to Ethereal (test email) — creates a new account on every server start
+    console.warn('⚠️  SMTP env vars missing! SMTP_HOST:', !!process.env.SMTP_HOST,
+      'SMTP_USER:', !!process.env.SMTP_USER, 'SMTP_PASS:', !!process.env.SMTP_PASS)
+    // Fall back to Ethereal (test email) — emails won't reach real inboxes
     const testAccount = await nodemailer.createTestAccount()
     console.log('Using Ethereal Mail for testing. Login at https://ethereal.email')
     console.log('Ethereal user:', testAccount.user)
@@ -47,8 +68,14 @@ export const sendVerificationEmail = async (to, code) => {
   try {
     const transporter = await getTransporter()
 
+    // Use the authenticated SMTP user as the from address
+    // Gmail ignores custom from addresses and replaces with the authenticated user
+    const fromAddress = process.env.SMTP_USER || 'no-reply@privacychat.local'
+
+    console.log(`📧 Sending verification email to: ${to}`)
+
     const info = await transporter.sendMail({
-      from: '"PrivacyChat" <no-reply@privacychat.local>',
+      from: `"PrivacyChat" <${fromAddress}>`,
       to,
       subject: 'Your PrivacyChat Verification Code',
       text: `Your verification code is: ${code}. It will expire in 10 minutes.`,
@@ -65,14 +92,22 @@ export const sendVerificationEmail = async (to, code) => {
       `,
     })
 
-    console.log('Verification email sent:', info.messageId)
+    console.log('✅ Verification email sent:', info.messageId)
+    console.log('   Accepted:', info.accepted)
+    console.log('   Rejected:', info.rejected)
     const previewUrl = nodemailer.getTestMessageUrl(info)
     if (previewUrl) {
       console.log('📧 Preview URL (Ethereal):', previewUrl)
     }
     return { success: true }
   } catch (error) {
-    console.error('Error sending verification email:', error)
+    console.error('❌ Error sending verification email:', {
+      message: error.message,
+      code: error.code,
+      command: error.command,
+      responseCode: error.responseCode,
+      response: error.response,
+    })
     return { success: false, error: error.message || error.toString() }
   }
 }
