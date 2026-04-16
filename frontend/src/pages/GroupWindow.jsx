@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useSocket } from '../context/SocketContext'
@@ -12,7 +12,7 @@ import GroupInfoPanel from './GroupInfoPanel'
 export default function GroupWindow() {
   const { groupId } = useParams()
   const { user } = useAuth()
-  const { notifications, socket } = useSocket()
+  const { notifications, socket, clearUnread } = useSocket()
   const navigate = useNavigate()
 
   const [group, setGroup]               = useState(null)
@@ -33,6 +33,8 @@ export default function GroupWindow() {
   const processedRef                    = useRef(new Set())
 
   const myId = user?.id || user?._id
+  const [typingUsers, setTypingUsers] = useState(new Map()) // userId -> username
+  const typingTimeoutRef = useRef(null)
 
   // Load group + messages + check active session
   useEffect(() => {
@@ -42,6 +44,8 @@ export default function GroupWindow() {
     setNormal([])
     setLoading(true)
     setShowInfo(false)
+    processedRef.current = new Set() // BUG FIX 7: prevent memory leak
+    clearUnread(groupId)
 
     const load = async () => {
       try {
@@ -109,6 +113,48 @@ export default function GroupWindow() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [normalMessages, privateMessages])
+
+  // ── Typing indicators ──
+  useEffect(() => {
+    if (!socket) return
+    const handleStart = (data) => {
+      if (data.groupId === groupId && data.userId !== myId) {
+        setTypingUsers(prev => new Map(prev).set(data.userId, data.username))
+      }
+    }
+    const handleStop = (data) => {
+      if (data.groupId === groupId) {
+        setTypingUsers(prev => { const m = new Map(prev); m.delete(data.userId); return m })
+      }
+    }
+    socket.on('typing:start', handleStart)
+    socket.on('typing:stop', handleStop)
+    return () => {
+      socket.off('typing:start', handleStart)
+      socket.off('typing:stop', handleStop)
+    }
+  }, [socket, groupId, myId])
+
+  const emitTyping = useCallback(() => {
+    if (!socket) return
+    socket.emit('typing:start', { groupId })
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+    typingTimeoutRef.current = setTimeout(() => {
+      socket.emit('typing:stop', { groupId })
+    }, 2000)
+  }, [socket, groupId])
+
+  const handleTextChange = (e) => {
+    setText(e.target.value)
+    emitTyping()
+  }
+
+  const typingLabel = (() => {
+    const names = Array.from(typingUsers.values())
+    if (names.length === 0) return null
+    if (names.length === 1) return `${names[0]} is typing...`
+    return `${names.length} people typing...`
+  })()
 
   // BUG FIX 8: the beacon for group private session end was pointing at
   // `/groups/${groupId}/private/end` — but that route requires an auth header
@@ -287,8 +333,8 @@ export default function GroupWindow() {
             className="text-left hover:bg-black/5 rounded-lg px-1 py-0.5 transition"
           >
             <p className="text-gray-900 font-medium text-base leading-tight">{group?.name || (loading ? 'Loading...' : 'Unknown Group')}</p>
-            <p className="text-gray-500 text-xs">
-              {group ? `${group.members?.length} member${group.members?.length !== 1 ? 's' : ''}` : ''}
+            <p className={`text-xs ${typingLabel ? 'text-emerald-500 font-medium' : 'text-gray-500'}`}>
+              {typingLabel || (group ? `${group.members?.length} member${group.members?.length !== 1 ? 's' : ''}` : '')}
             </p>
           </button>
         </div>
@@ -508,7 +554,7 @@ export default function GroupWindow() {
           <div className="flex-1 bg-white rounded-lg flex items-center shadow-sm border border-gray-200 overflow-hidden">
             <input
               value={text}
-              onChange={e => setText(e.target.value)}
+              onChange={handleTextChange}
               maxLength={500}
               placeholder={mode === 'private' ? '🔒 Type a private group message...' : 'Type a message'}
               className={`w-full px-4 py-3 text-[15px] outline-none transition-colors ${

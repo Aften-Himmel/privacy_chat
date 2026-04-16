@@ -1,1 +1,112 @@
 @import "tailwindcss";
+
+/* ── Dark mode theme ── */
+/* Since the app uses hardcoded Tailwind color classes, we override them via
+   the data-theme attribute on <html>. This approach uses CSS to re-color
+   all the major surfaces and text without changing every component file. */
+
+[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+/* Background surfaces */
+[data-theme="dark"] .bg-\[\#f0f2f5\],
+[data-theme="dark"] .bg-\[\#f4f6f8\],
+[data-theme="dark"] .bg-\[\#f0f7ff\] {
+  background-color: #1a1a2e !important;
+}
+
+[data-theme="dark"] .bg-white {
+  background-color: #16213e !important;
+}
+
+[data-theme="dark"] .bg-gray-50,
+[data-theme="dark"] .hover\:bg-gray-50:hover {
+  background-color: #1a1a3e !important;
+}
+
+[data-theme="dark"] .bg-gray-100 {
+  background-color: #1e2746 !important;
+}
+
+/* Text colors */
+[data-theme="dark"] .text-gray-900,
+[data-theme="dark"] .text-gray-800 {
+  color: #e4e6eb !important;
+}
+
+[data-theme="dark"] .text-gray-700,
+[data-theme="dark"] .text-gray-600 {
+  color: #b0b3b8 !important;
+}
+
+[data-theme="dark"] .text-gray-500,
+[data-theme="dark"] .text-gray-400 {
+  color: #8a8d91 !important;
+}
+
+/* Borders */
+[data-theme="dark"] .border-gray-200,
+[data-theme="dark"] .border-gray-100,
+[data-theme="dark"] .border-gray-50,
+[data-theme="dark"] .border-gray-300 {
+  border-color: #2d3748 !important;
+}
+
+/* Input backgrounds */
+[data-theme="dark"] input,
+[data-theme="dark"] textarea {
+  background-color: #1a1a2e !important;
+  color: #e4e6eb !important;
+  border-color: #2d3748 !important;
+}
+
+[data-theme="dark"] input::placeholder,
+[data-theme="dark"] textarea::placeholder {
+  color: #6b7280 !important;
+}
+
+/* Sent message bubbles */
+[data-theme="dark"] .bg-\[\#dbeafe\] {
+  background-color: #1e3a5f !important;
+}
+
+[data-theme="dark"] .text-blue-950 {
+  color: #93c5fd !important;
+}
+
+/* Login / Register pages */
+[data-theme="dark"] .min-h-screen.bg-\[\#f0f2f5\] {
+  background-color: #0f0f23 !important;
+}
+
+/* Shadow adjustments */
+[data-theme="dark"] .shadow-sm,
+[data-theme="dark"] .shadow-lg,
+[data-theme="dark"] .shadow-xl,
+[data-theme="dark"] .shadow-2xl {
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Scrollbar for dark mode */
+[data-theme="dark"] ::-webkit-scrollbar {
+  width: 6px;
+}
+[data-theme="dark"] ::-webkit-scrollbar-track {
+  background: #1a1a2e;
+}
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: #2d3748;
+  border-radius: 3px;
+}
+
+/* Notification dropdown */
+[data-theme="dark"] .bg-\[\#f0f2f5\].border-b {
+  background-color: #1a1a2e !important;
+}
+
+/* Yellow system banners */
+[data-theme="dark"] .bg-\[\#fff9c4\] {
+  background-color: #3a3400 !important;
+  color: #fde68a !important;
+}

@@ -31,11 +31,11 @@ export default function InvitationsDropdown({ pending, onRespond }) {
       </button>
 
       {open && (
-        <div className="absolute top-full right-[-80px] md:right-auto md:left-1/2 md:-translate-x-1/2 mt-2 w-72 sm:w-80 bg-white border border-gray-200 rounded-xl shadow-xl z-50 overflow-hidden">
+        <div className="absolute top-full left-0 right-0 mt-2 w-max bg-white border border-gray-200 rounded-xl shadow-xl z-50 overflow-hidden" style={{minWidth: '280px', maxWidth: 'max(280px, calc(100vw - 2rem))'}}>
           <div className="px-4 py-2.5 bg-[#f0f2f5] border-b border-gray-200 flex justify-between">
             <span className="text-gray-800 text-sm font-semibold">Contact Requests</span>
           </div>
-          <div className="max-h-80 overflow-y-auto">
+          <div className="max-h-[60vh] overflow-y-auto">
             {pending.length === 0 ? (
               <p className="text-gray-500 text-sm text-center py-8">No new requests</p>
             ) : pending.map(inv => (

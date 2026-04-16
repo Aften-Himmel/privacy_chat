@@ -107,6 +107,12 @@ router.post('/:userId/private/end-beacon', async (req, res) => {
     const session = await Session.findById(sessionId)
     if (!session || session.status === 'ended') return res.status(200).end()
 
+    // BUG FIX 4: Validate the caller is a participant before allowing session end
+    const callerIsParticipant = session.participants.some(
+      p => p.toString() === req.params.userId
+    )
+    if (!callerIsParticipant) return res.status(200).end()
+
     session.status = 'ended'
     await session.save()
     clearPrivateMessages(sessionId)
@@ -241,6 +247,38 @@ router.post('/:userId/file', handleUpload, async (req, res) => {
     const populated = await message.populate('sender', 'username')
     sendNotification(io, req.params.userId, { type: 'new_message', message: populated, conversationId: convId })
     res.status(201).json(populated)
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+})
+
+// ── Read receipts ──
+router.post('/:userId/messages/read', async (req, res) => {
+  try {
+    const myId = req.user.id
+    const convId = [myId, req.params.userId].sort().join('_')
+
+    // Mark all messages sent by the other user as read
+    const result = await Message.updateMany(
+      {
+        conversationId: convId,
+        sender: req.params.userId,
+        status: { $ne: 'read' },
+      },
+      { $set: { status: 'read' }, $addToSet: { readBy: myId } }
+    )
+
+    // Notify the sender so their UI updates checkmarks in real-time
+    if (result.modifiedCount > 0) {
+      const io = req.app.get('io')
+      sendNotification(io, req.params.userId, {
+        type: 'messages_read',
+        conversationId: convId,
+        readBy: myId,
+      })
+    }
+
+    res.json({ updated: result.modifiedCount })
   } catch (err) {
     res.status(500).json({ message: err.message })
   }
@@ -390,12 +428,24 @@ router.post('/:userId/private/message', async (req, res) => {
 router.post('/:userId/private/end', async (req, res) => {
   try {
     const { sessionId } = req.body
-    const convId = getConvId(req.user.id, req.params.userId)
+    if (!sessionId) return res.status(400).json({ message: 'sessionId required' })
 
-    await Session.findByIdAndUpdate(sessionId, { status: 'ended' })
+    const session = await Session.findById(sessionId)
+    if (!session) return res.status(404).json({ message: 'Session not found' })
+
+    // Verify caller is a participant in this session
+    const isParticipant = session.participants.some(p => p.toString() === req.user.id)
+    if (!isParticipant) return res.status(403).json({ message: 'Not authorized to end this session' })
+
+    if (session.status !== 'ended') {
+      session.status = 'ended'
+      await session.save()
+    }
+
     clearPrivateMessages(sessionId)
     cleanupPrivateFiles(sessionId)
 
+    const convId = getConvId(req.user.id, req.params.userId)
     const io = req.app.get('io')
     sendNotification(io, req.params.userId, {
       type: 'private_session_ended',

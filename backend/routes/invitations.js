@@ -23,6 +23,28 @@ router.post('/send', async (req, res) => {
     if (existing)
       return res.status(400).json({ message: 'Invitation already sent' })
 
+    // Check for a reverse pending invite (the other user already invited us)
+    const reverse = await Invitation.findOne({ from: toUserId, to: req.user.id, status: 'pending' })
+    if (reverse) {
+      // Auto-accept the reverse invitation instead of creating a duplicate
+      reverse.status = 'accepted'
+      await reverse.save()
+
+      await User.findByIdAndUpdate(req.user.id, { $addToSet: { contacts: toUserId } })
+      await User.findByIdAndUpdate(toUserId, { $addToSet: { contacts: req.user.id } })
+
+      const io = req.app.get('io')
+      sendNotification(io, toUserId, {
+        type: 'invitation_response',
+        action: 'accepted',
+        from: req.user.username,
+        toUserId: req.user.id,
+        message: `${req.user.username} accepted your invitation!`,
+      })
+
+      return res.status(200).json({ message: 'Mutual invite detected — contact added automatically', autoAccepted: true })
+    }
+
     const invitation = await Invitation.create({ from: req.user.id, to: toUserId, type })
     const populated = await invitation.populate('from', 'username avatar')
 

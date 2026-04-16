@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useSocket } from '../context/SocketContext'
@@ -9,7 +9,7 @@ const getConvId = (a, b) => [a, b].sort().join('_')
 export default function ChatWindow() {
   const { userId } = useParams()
   const { user } = useAuth()
-  const { notifications, clearNotificationsForUser } = useSocket()
+  const { notifications, clearNotificationsForUser, clearNotification, isUserOnline, socket, clearUnread } = useSocket()
   const navigate = useNavigate()
 
   const [contact, setContact]           = useState(null)
@@ -29,13 +29,21 @@ export default function ChatWindow() {
   const processedRef = useRef(new Set())
   const convId = user ? getConvId(user.id || user._id, userId) : null
 
-  // Load contact + normal message history + check for active session on open
+  const [pendingSession, setPendingSession] = useState(null) // { sessionId, startedBy }
+  const [isTyping, setIsTyping] = useState(false)
+  const typingTimeoutRef = useRef(null)
+
+  const myId = user?.id || user?._id
+
+  // ── Load contact + messages + restore active session on mount ──
   useEffect(() => {
     setMode('normal')
     setSessionId(null)
     setPrivate([])
     setNormal([])
+    setPendingSession(null)
     setLoading(true)
+    processedRef.current = new Set() // BUG FIX 7: prevent memory leak
 
     const load = async () => {
       try {
@@ -44,6 +52,7 @@ export default function ChatWindow() {
           api.get(`/messages/${userId}`),
           api.get(`/messages/${userId}/session/active`),
         ])
+
         const found = contactsRes.data.find(c => c._id === userId)
         if (found) {
           setContact(found)
@@ -72,64 +81,107 @@ export default function ChatWindow() {
     load()
   }, [userId])
 
-  // Listen for real-time events
+  // ── Real-time notifications ──
   useEffect(() => {
     for (const n of notifications) {
       if (processedRef.current.has(n.id)) continue
       processedRef.current.add(n.id)
 
-      if (n.type === 'new_message' && n.conversationId === convId)
+      if (n.type === 'new_message' && n.conversationId === convId) {
         setNormal(p => [...p, n.message])
+        // Send read receipt since user is viewing this chat
+        api.post(`/messages/${userId}/messages/read`).catch(() => {})
+      }
 
       if (n.type === 'new_private_message' && n.conversationId === convId)
         setPrivate(p => [...p, n.message])
 
       if (n.type === 'private_session_started' && n.conversationId === convId) {
-        setMode('private')
-        setSessionId(n.sessionId)
-        setPrivate([])
+        const amIStarter = (n.startedBy === myId)
+        if (amIStarter) {
+          setMode('private')
+          setSessionId(n.sessionId)
+          setPrivate([])
+        } else {
+          // Show the in-window banner and immediately remove the bell notification
+          // — the user is already looking at the chat, the banner is enough.
+          setPendingSession({ sessionId: n.sessionId, startedBy: n.startedBy })
+          clearNotification(n.id)
+        }
       }
 
       if (n.type === 'private_session_ended' && n.conversationId === convId) {
         setMode('normal')
         setSessionId(null)
         setPrivate([])
+        setPendingSession(null)
       }
 
-      if (n.type === 'message_deleted' && n.conversationId === convId) {
-        setNormal(p => p.filter(m => (m._id || m.id) !== n.messageId))
-      }
-
-      if (n.type === 'messages_deleted_everyone' && n.conversationId === convId) {
+      if (n.type === 'messages_deleted_everyone' && n.conversationId === convId)
         setNormal(p => p.filter(m => !n.messageIds.includes(m._id || m.id)))
-      }
 
-      if (n.type === 'contact_removed' && n.removedBy === userId) {
+      if (n.type === 'contact_removed' && n.removedBy === userId)
         navigate('/chat')
+
+      // Read receipts: other user read our messages
+      if (n.type === 'messages_read' && n.conversationId === convId) {
+        setNormal(p => p.map(m => {
+          const senderId = m.sender?._id || m.sender
+          if (senderId === myId && m.status !== 'read') return { ...m, status: 'read' }
+          return m
+        }))
       }
     }
+  }, [notifications, convId, userId, navigate, myId, clearNotification])
 
-    // BUG FIX 5: clearNotificationsForUser was listed as a dependency of this
-    // effect, but it's a useCallback that is stable — however including it with
-    // `notifications` caused the effect to re-run (and re-process) on every
-    // notifications change AND any time the callback identity changed.  The
-    // real fix is to call the clear function in a separate, targeted effect so
-    // it doesn't entangle with the notification-processing loop above.
-  }, [notifications, convId, userId, navigate])
-
-  // Separate effect: clear notifications for this user when the window is open.
-  // BUG FIX 5 (continued): using a separate effect with only [userId] prevents
-  // clearNotificationsForUser from triggering the notification-processing loop.
+  // Separate effect: clear all bell notifications for this user while window is open
   useEffect(() => {
     clearNotificationsForUser(userId)
-  }, [userId, clearNotificationsForUser])
+    if (convId) clearUnread(convId)
+    // Send read receipt when entering the chat
+    api.post(`/messages/${userId}/messages/read`).catch(() => {})
+  }, [userId, clearNotificationsForUser, convId, clearUnread])
 
-  // Auto scroll
+  // BUG FIX 5: Auto-scroll to bottom on new messages
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [normalMessages, privateMessages])
 
-  // Auto-end private session on tab close (beforeunload) using sendBeacon
+  // BUG FIX 8: Live contact online status
+  const contactOnline = isUserOnline(userId)
+
+  // ── Typing indicators ──
+  useEffect(() => {
+    if (!socket) return
+    const handleStart = (data) => {
+      if (data.userId === userId) setIsTyping(true)
+    }
+    const handleStop = (data) => {
+      if (data.userId === userId) setIsTyping(false)
+    }
+    socket.on('typing:start', handleStart)
+    socket.on('typing:stop', handleStop)
+    return () => {
+      socket.off('typing:start', handleStart)
+      socket.off('typing:stop', handleStop)
+    }
+  }, [socket, userId])
+
+  const emitTyping = useCallback(() => {
+    if (!socket) return
+    socket.emit('typing:start', { toUserId: userId })
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+    typingTimeoutRef.current = setTimeout(() => {
+      socket.emit('typing:stop', { toUserId: userId })
+    }, 2000)
+  }, [socket, userId])
+
+  const handleTextChange = (e) => {
+    setText(e.target.value)
+    emitTyping()
+  }
+
+  // Beacon on tab close
   useEffect(() => {
     if (!sessionId) return
     const handler = () => {
@@ -143,19 +195,10 @@ export default function ChatWindow() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [sessionId, userId])
 
-  // BUG FIX 6: the original visibilitychange handler ended the private session
-  // whenever the tab became hidden — this fired on ANY tab switch, window
-  // minimize, alt-tab, phone screen-off, etc., making private sessions
-  // impossible to use in practice.  We now only end the session when the page
-  // is being fully unloaded (beforeunload above handles the true tab-close case)
-  // and remove the visibilitychange session-ending entirely. If you want to keep
-  // some form of it, a safer pattern would be a timeout that cancels if the user
-  // returns quickly — but that adds complexity without clear benefit here.
-
+  // ── File handling ──
   const ALLOWED_TYPES = new Set([
     'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/bmp',
-    'application/pdf',
-    'application/msword',
+    'application/pdf', 'application/msword',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/vnd.ms-excel',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -172,7 +215,7 @@ export default function ChatWindow() {
     const selected = e.target.files[0]
     if (!selected) return
     if (!ALLOWED_TYPES.has(selected.type)) {
-      alert('This file type is not allowed. Please upload images, documents, audio, or video files only.')
+      alert('This file type is not allowed.')
       if (fileInputRef.current) fileInputRef.current.value = ''
       return
     }
@@ -184,6 +227,7 @@ export default function ChatWindow() {
     setFile(selected)
   }
 
+  // ── Send message ──
   const sendMessage = async e => {
     e.preventDefault()
     if ((!text.trim() && !file) || sending) return
@@ -195,13 +239,11 @@ export default function ChatWindow() {
         if (text.trim()) formData.append('text', text)
         if (mode === 'private') formData.append('sessionId', sessionId)
         formData.append('file', file)
-
         const res = await api.post(`/messages/${userId}/file`, formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
         })
         if (mode === 'normal') setNormal(p => [...p, res.data])
         else setPrivate(p => [...p, res.data])
-
         setFile(null)
         if (fileInputRef.current) fileInputRef.current.value = ''
       } else {
@@ -215,13 +257,13 @@ export default function ChatWindow() {
       }
       setText('')
     } catch (err) {
-      console.error('Failed to send message:', err)
-      alert(err.response?.data?.message || 'Failed to send file. Is it too large?')
+      alert(err.response?.data?.message || 'Failed to send message.')
     } finally {
       setSending(false)
     }
   }
 
+  // ── Private session controls ──
   const startPrivate = async () => {
     try {
       const res = await api.post(`/messages/${userId}/private/start`)
@@ -231,6 +273,18 @@ export default function ChatWindow() {
     } catch (e) {
       alert(e.response?.data?.message || 'Failed to start session')
     }
+  }
+
+  const joinPrivate = () => {
+    if (!pendingSession) return
+    setMode('private')
+    setSessionId(pendingSession.sessionId)
+    setPrivate([])
+    setPendingSession(null)
+  }
+
+  const dismissPending = () => {
+    setPendingSession(null)
   }
 
   const endPrivate = async () => {
@@ -244,13 +298,11 @@ export default function ChatWindow() {
     }
   }
 
-  const myId = user?.id || user?._id
-
+  // ── Message selection ──
   const toggleSelect = (msgId) => {
     setSelectedMsgs(prev => {
       const next = new Set(prev)
-      if (next.has(msgId)) next.delete(msgId)
-      else next.add(msgId)
+      next.has(msgId) ? next.delete(msgId) : next.add(msgId)
       return next
     })
   }
@@ -270,8 +322,7 @@ export default function ChatWindow() {
       setSelectedMsgs(new Set())
       setShowDeleteOpts(false)
     } catch (err) {
-      console.error('Failed to delete messages:', err)
-      alert(err.response?.data?.message || 'Failed to delete some messages')
+      alert(err.response?.data?.message || 'Failed to delete messages')
     } finally {
       setDeleting(false)
     }
@@ -287,29 +338,30 @@ export default function ChatWindow() {
   return (
     <div className="flex flex-col h-full bg-[#f4f6f8]">
 
-      {/* Header */}
+      {/* ── Header ── */}
       <div className="bg-[#f0f2f5] border-b border-gray-200 px-4 py-3 flex items-center justify-between shadow-sm z-10">
         <div className="flex items-center gap-3">
           <button onClick={() => navigate('/chat')}
             className="md:hidden text-gray-500 hover:text-gray-800 bg-transparent border-none cursor-pointer text-xl p-1">←</button>
-
           <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-lg">
             {contact?.username?.charAt(0).toUpperCase() || '?'}
           </div>
-
           <div>
             <p className="text-gray-900 font-medium text-base">{contact?.username || ''}</p>
-            <p className="text-gray-500 text-xs">{contact?.isOnline ? 'Online' : 'Offline'}</p>
+            <p className={`text-xs ${isTyping ? 'text-emerald-500 font-medium' : 'text-gray-500'}`}>
+              {isTyping ? 'typing...' : contactOnline ? 'Online' : 'Offline'}
+            </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          {mode === 'normal' ? (
+          {mode === 'normal' && !pendingSession && (
             <button onClick={startPrivate}
               className="text-xs bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 font-medium px-3 py-1.5 rounded-lg cursor-pointer transition">
               🔒 Start Private Session
             </button>
-          ) : (
+          )}
+          {mode === 'private' && (
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium text-purple-700 bg-purple-100 border border-purple-200 px-3 py-1.5 rounded-lg">
                 🔒 Private Session Active
@@ -323,18 +375,39 @@ export default function ChatWindow() {
         </div>
       </div>
 
-      {/* Private mode banner */}
+      {/* ── Active private session banner ── */}
       {mode === 'private' && (
-        <div className="bg-purple-50 border-b border-purple-100 px-4 py-2 text-center shadow-sm z-0">
+        <div className="bg-purple-50 border-b border-purple-100 px-4 py-2 text-center">
           <p className="text-purple-800 text-xs font-medium">
             🔒 Private session active — messages exist only in memory and will be permanently deleted when this session ends
           </p>
         </div>
       )}
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 space-y-2 lg:space-y-3 w-full bg-[#f0f7ff] relative">
+      {/* ── Incoming private session invite banner ── */}
+      {pendingSession && mode === 'normal' && (
+        <div className="bg-purple-50 border-b border-purple-200 px-4 py-3 flex items-center justify-between gap-3 shadow-sm">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-purple-600 text-lg flex-shrink-0">🔒</span>
+            <p className="text-purple-900 text-sm font-medium leading-snug">
+              <span className="font-bold">{contact?.username || 'The other user'}</span> has started a private session
+            </p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button onClick={joinPrivate}
+              className="text-xs font-bold bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded-lg cursor-pointer transition shadow-sm">
+              Join
+            </button>
+            <button onClick={dismissPending}
+              className="text-xs font-medium text-gray-500 hover:text-gray-700 bg-white hover:bg-gray-100 border border-gray-200 px-3 py-1.5 rounded-lg cursor-pointer transition">
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
+      {/* ── Messages ── */}
+      <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-6 space-y-2 lg:space-y-3 w-full bg-[#f0f7ff] relative">
         {loading && (
           <div className="absolute inset-0 flex items-center justify-center bg-[#f0f7ff]/50 z-20">
             <span className="bg-white text-gray-600 text-sm font-medium px-4 py-2 rounded-full shadow-md">Loading chat...</span>
@@ -370,18 +443,16 @@ export default function ChatWindow() {
                   <div className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center shadow-sm border ${
                     isSelected ? 'bg-indigo-500 border-indigo-500' : 'bg-transparent border-gray-400 opacity-50'
                   } transition-all`}>
-                    {isSelected && <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>}
+                    {isSelected && <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"/></svg>}
                   </div>
                 )}
                 <div className={`px-3 py-1.5 rounded-lg text-[15px] shadow-sm relative transition-all ${
                   isSelected ? 'ring-2 ring-indigo-400 bg-indigo-50 opacity-90' :
                   mine
-                    ? mode === 'private'
-                      ? 'bg-purple-100 text-gray-900 border border-purple-200'
-                      : 'bg-[#dbeafe] text-blue-950 border border-blue-200'
-                    : mode === 'private'
-                      ? 'bg-white text-gray-900 border border-purple-200'
-                      : 'bg-white text-gray-900 border border-gray-100'
+                    ? mode === 'private' ? 'bg-purple-100 text-gray-900 border border-purple-200'
+                                         : 'bg-[#dbeafe] text-blue-950 border border-blue-200'
+                    : mode === 'private' ? 'bg-white text-gray-900 border border-purple-200'
+                                         : 'bg-white text-gray-900 border border-gray-100'
                 }`}>
                   {msg.fileUrl && (
                     <div className="mb-1 mt-1">
@@ -400,7 +471,7 @@ export default function ChatWindow() {
                             <p className="text-xs text-gray-500">{(msg.fileSize / 1024).toFixed(1)} KB</p>
                           </div>
                           <span className="p-1 rounded-full text-blue-600">
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
                           </span>
                         </a>
                       )}
@@ -412,7 +483,33 @@ export default function ChatWindow() {
                       {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
                     {mine && (
-                      <svg viewBox="0 0 18 18" width="14" height="14" className="text-blue-500"><path fill="currentColor" d="m17.394 5.035-.57-.444a.434.434 0 0 0-.609.076l-6.39 8.198a.38.38 0 0 1-.577.039l-.427-.388a.381.381 0 0 0-.578.038l-.451.576a.497.497 0 0 0 .043.645l1.575 1.51a.38.38 0 0 0 .577-.039l7.483-9.602a.436.436 0 0 0-.076-.609zm-4.892 0-.57-.444a.434.434 0 0 0-.609.076l-4.665 5.986-1.127-1.146a.382.382 0 0 0-.547-.008l-.513.491a.382.382 0 0 0 .004.544l2.254 2.292a.382.382 0 0 0 .546.009l5.303-6.816a.436.436 0 0 0-.076-.609z"></path><path fill="currentColor" d="m8.544 14.512-1.996-1.921A.382.382 0 0 0 6.001 12.6l-.513.491a.382.382 0 0 0 .005.544l2.502 2.408a.38.38 0 0 0 .577-.039l.451-.577a.494.494 0 0 0-.022-.647z"></path></svg>
+                      (() => {
+                        const status = msg.status || 'sent'
+                        if (status === 'read') {
+                          // Blue double-check
+                          return (
+                            <svg viewBox="0 0 18 18" width="14" height="14" className="text-blue-500">
+                              <path fill="currentColor" d="m17.394 5.035-.57-.444a.434.434 0 0 0-.609.076l-6.39 8.198a.38.38 0 0 1-.577.039l-.427-.388a.381.381 0 0 0-.578.038l-.451.576a.497.497 0 0 0 .043.645l1.575 1.51a.38.38 0 0 0 .577-.039l7.483-9.602a.436.436 0 0 0-.076-.609zm-4.892 0-.57-.444a.434.434 0 0 0-.609.076l-4.665 5.986-1.127-1.146a.382.382 0 0 0-.547-.008l-.513.491a.382.382 0 0 0 .004.544l2.254 2.292a.382.382 0 0 0 .546.009l5.303-6.816a.436.436 0 0 0-.076-.609z"/>
+                              <path fill="currentColor" d="m8.544 14.512-1.996-1.921A.382.382 0 0 0 6.001 12.6l-.513.491a.382.382 0 0 0 .005.544l2.502 2.408a.38.38 0 0 0 .577-.039l.451-.577a.494.494 0 0 0-.022-.647z"/>
+                            </svg>
+                          )
+                        } else if (status === 'delivered') {
+                          // Grey double-check
+                          return (
+                            <svg viewBox="0 0 18 18" width="14" height="14" className="text-gray-400">
+                              <path fill="currentColor" d="m17.394 5.035-.57-.444a.434.434 0 0 0-.609.076l-6.39 8.198a.38.38 0 0 1-.577.039l-.427-.388a.381.381 0 0 0-.578.038l-.451.576a.497.497 0 0 0 .043.645l1.575 1.51a.38.38 0 0 0 .577-.039l7.483-9.602a.436.436 0 0 0-.076-.609zm-4.892 0-.57-.444a.434.434 0 0 0-.609.076l-4.665 5.986-1.127-1.146a.382.382 0 0 0-.547-.008l-.513.491a.382.382 0 0 0 .004.544l2.254 2.292a.382.382 0 0 0 .546.009l5.303-6.816a.436.436 0 0 0-.076-.609z"/>
+                              <path fill="currentColor" d="m8.544 14.512-1.996-1.921A.382.382 0 0 0 6.001 12.6l-.513.491a.382.382 0 0 0 .005.544l2.502 2.408a.38.38 0 0 0 .577-.039l.451-.577a.494.494 0 0 0-.022-.647z"/>
+                            </svg>
+                          )
+                        } else {
+                          // Grey single-check (sent)
+                          return (
+                            <svg viewBox="0 0 18 18" width="14" height="14" className="text-gray-400">
+                              <path fill="currentColor" d="m17.394 5.035-.57-.444a.434.434 0 0 0-.609.076l-6.39 8.198a.38.38 0 0 1-.577.039l-.427-.388a.381.381 0 0 0-.578.038l-.451.576a.497.497 0 0 0 .043.645l1.575 1.51a.38.38 0 0 0 .577-.039l7.483-9.602a.436.436 0 0 0-.076-.609z"/>
+                            </svg>
+                          )
+                        }
+                      })()
                     )}
                   </div>
                 </div>
@@ -423,7 +520,7 @@ export default function ChatWindow() {
         <div ref={bottomRef} />
       </div>
 
-      {/* Selection Action Bar */}
+      {/* ── Selection Action Bar ── */}
       {selectedMsgs.size > 0 && !showDeleteOpts && (
         <div className="px-4 py-2.5 bg-indigo-50 border-t border-indigo-200 flex items-center justify-between z-20">
           <div className="flex items-center gap-2">
@@ -437,14 +534,14 @@ export default function ChatWindow() {
             </button>
             <button onClick={() => setShowDeleteOpts(true)}
               className="text-xs bg-indigo-500 hover:bg-indigo-600 text-white font-medium px-4 py-1.5 rounded-lg cursor-pointer transition shadow-sm flex items-center gap-1.5">
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
               Delete options
             </button>
           </div>
         </div>
       )}
 
-      {/* Delete Options Modal */}
+      {/* ── Delete Options Modal ── */}
       {showDeleteOpts && (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/40 backdrop-blur-sm">
           <div className="bg-white rounded-xl shadow-xl p-5 mb-10 min-w-[300px]">
@@ -461,9 +558,7 @@ export default function ChatWindow() {
                 </button>
               )}
               {!canDeleteForEveryone && (
-                <p className="text-xs text-gray-500 px-1 mt-1">
-                  You can only delete for everyone if you sent all selected messages.
-                </p>
+                <p className="text-xs text-gray-500 px-1 mt-1">You can only delete for everyone if you sent all selected messages.</p>
               )}
               <button onClick={() => setShowDeleteOpts(false)}
                 className="w-full text-center px-4 py-2.5 mt-2 rounded-lg border border-gray-200 text-gray-600 font-medium hover:bg-gray-50 transition cursor-pointer">
@@ -474,45 +569,42 @@ export default function ChatWindow() {
         </div>
       )}
 
-      {/* File Preview */}
+      {/* ── File Preview ── */}
       {file && (
         <div className="px-5 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between z-10">
           <div className="flex items-center gap-3 overflow-hidden">
             <div className="w-10 h-10 bg-blue-100 text-blue-500 rounded-lg flex items-center justify-center flex-shrink-0">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path></svg>
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg>
             </div>
             <div className="min-w-0">
               <p className="text-sm font-medium text-gray-800 truncate">{file.name}</p>
               <p className="text-xs text-gray-500">{(file.size / 1024).toFixed(1)} KB</p>
             </div>
           </div>
-          <button onClick={() => { setFile(null); if (fileInputRef.current) fileInputRef.current.value='' }}
-            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-200 text-gray-500 transition">
-            ✕
-          </button>
+          <button onClick={() => { setFile(null); if (fileInputRef.current) fileInputRef.current.value = '' }}
+            className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-200 text-gray-500 transition">✕</button>
         </div>
       )}
 
-      {/* Input */}
+      {/* ── Input bar ── */}
       <div className={`px-4 py-3 flex items-center z-10 ${mode === 'private' ? 'bg-purple-50 border-t border-purple-200' : 'bg-[#f0f2f5]'}`}>
         <form onSubmit={sendMessage} className="flex gap-2 w-full max-w-5xl mx-auto items-end">
           <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" />
           <button type="button" onClick={() => fileInputRef.current?.click()}
             className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-full hover:bg-gray-200 text-gray-500 transition cursor-pointer">
             <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path>
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
             </svg>
           </button>
           <div className="flex-1 bg-white rounded-lg flex items-center shadow-sm border border-gray-200 overflow-hidden">
             <input
               value={text}
-              onChange={e => setText(e.target.value)}
+              onChange={handleTextChange}
               maxLength={500}
+              autoFocus
               placeholder={mode === 'private' ? '🔒 Type a private message...' : 'Type a message'}
               className={`w-full px-4 py-3 text-[15px] outline-none ${
-                mode === 'private'
-                  ? 'text-purple-900 placeholder-purple-300'
-                  : 'text-gray-800 placeholder-gray-400'
+                mode === 'private' ? 'text-purple-900 placeholder-purple-300' : 'text-gray-800 placeholder-gray-400'
               }`}
             />
             {text.length > 400 && (
@@ -522,9 +614,9 @@ export default function ChatWindow() {
             )}
           </div>
           <button type="submit" disabled={sending || (!text.trim() && !file) || text.length > 500}
-            className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-full bg-blue-500 hover:bg-blue-600 focus:bg-blue-600 transition disabled:opacity-50 disabled:bg-blue-300 cursor-pointer shadow-sm ml-1">
+            className="flex-shrink-0 w-11 h-11 flex items-center justify-center rounded-full bg-blue-500 hover:bg-blue-600 transition disabled:opacity-50 disabled:bg-blue-300 cursor-pointer shadow-sm ml-1">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="white">
-              <path d="M1.101 21.757 23.8 12.028 1.101 2.3l.011 7.912 13.623 1.816-13.623 1.817-.011 7.912z"></path>
+              <path d="M1.101 21.757 23.8 12.028 1.101 2.3l.011 7.912 13.623 1.816-13.623 1.817-.011 7.912z"/>
             </svg>
           </button>
         </form>

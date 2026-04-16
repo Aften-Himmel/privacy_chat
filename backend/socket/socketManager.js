@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken'
+import User from '../models/User.js'
 import Session from '../models/Session.js'
 import GroupSession from '../models/GroupSession.js'
 import Group from '../models/Group.js'
@@ -43,9 +44,32 @@ export const setupSocket = (io) => {
     onlineUsers.set(userId, socket.id)
     io.emit('users:online', Array.from(onlineUsers.keys()))
 
+    // BUG FIX: persist isOnline to DB so REST reads are accurate
+    User.findByIdAndUpdate(userId, { isOnline: true }).catch(err =>
+      console.error('Failed to set user online:', err.message)
+    )
+
     socket.on('notification:send', ({ toUserId, notification }) => {
       const target = onlineUsers.get(toUserId)
       if (target) io.to(target).emit('notification:receive', notification)
+    })
+
+    // ── Typing indicators ──
+    socket.on('typing:start', ({ toUserId, groupId }) => {
+      if (toUserId) {
+        const target = onlineUsers.get(toUserId)
+        if (target) io.to(target).emit('typing:start', { userId, username: socket.username })
+      } else if (groupId) {
+        socket.to(`group:${groupId}`).emit('typing:start', { userId, username: socket.username, groupId })
+      }
+    })
+    socket.on('typing:stop', ({ toUserId, groupId }) => {
+      if (toUserId) {
+        const target = onlineUsers.get(toUserId)
+        if (target) io.to(target).emit('typing:stop', { userId })
+      } else if (groupId) {
+        socket.to(`group:${groupId}`).emit('typing:stop', { userId, groupId })
+      }
     })
 
     socket.on('group:join', (groupId) => {
@@ -56,6 +80,11 @@ export const setupSocket = (io) => {
       onlineUsers.delete(userId)
       console.log(`User ${userId} disconnected`)
       io.emit('users:online', Array.from(onlineUsers.keys()))
+
+      // BUG FIX: persist isOnline to DB
+      User.findByIdAndUpdate(userId, { isOnline: false }).catch(err =>
+        console.error('Failed to set user offline:', err.message)
+      )
 
       try {
         // 1:1 private sessions

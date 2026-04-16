@@ -3,6 +3,7 @@ import mongoose from 'mongoose'
 import cors from 'cors'
 import dotenv from 'dotenv'
 import helmet from 'helmet'
+import rateLimit from 'express-rate-limit'
 import { createServer } from 'http'
 import { Server } from 'socket.io'
 import path from 'path'
@@ -37,6 +38,15 @@ app.use(helmet({
 app.use(cors({ origin: process.env.CLIENT_URL }))
 app.use(express.json())
 
+// ── Rate limiting for auth routes ──
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many requests, please try again later' },
+})
+
 // ── Ensure uploads directory exists ──
 const uploadsDir = path.join(__dirname, 'uploads')
 if (!fs.existsSync(uploadsDir)) {
@@ -45,7 +55,7 @@ if (!fs.existsSync(uploadsDir)) {
 app.use('/uploads', express.static(uploadsDir))
 
 // Routes
-app.use('/api/auth',        authRoutes)
+app.use('/api/auth',        authLimiter, authRoutes)
 app.use('/api/contacts',    contactRoutes)
 app.use('/api/groups',      groupRoutes)
 app.use('/api/invitations', invitationRoutes)

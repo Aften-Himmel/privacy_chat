@@ -444,6 +444,11 @@ router.post('/:groupId/messages/delete', async (req, res) => {
 // GET /api/groups/:groupId/session/active
 router.get('/:groupId/session/active', async (req, res) => {
   try {
+    const group = await Group.findById(req.params.groupId)
+    if (!group) return res.status(404).json({ message: 'Group not found' })
+    if (!group.members.map(m => m.toString()).includes(req.user.id))
+      return res.status(403).json({ message: 'Not a member of this group' })
+
     const session = await GroupSession.findOne({ groupId: req.params.groupId, status: 'active' })
     res.json(session)
   } catch (err) {
@@ -533,10 +538,25 @@ router.post('/:groupId/private/message', async (req, res) => {
 router.post('/:groupId/private/end', async (req, res) => {
   try {
     const { sessionId } = req.body
+    if (!sessionId) return res.status(400).json({ message: 'sessionId required' })
+
     const group = await Group.findById(req.params.groupId)
     if (!group) return res.status(404).json({ message: 'Group not found' })
 
-    await GroupSession.findByIdAndUpdate(sessionId, { status: 'ended' })
+    const session = await GroupSession.findById(sessionId)
+    if (!session) return res.status(404).json({ message: 'Session not found' })
+
+    // Only admins or the session starter can end the session
+    const isAdmin = group.admins.map(a => a.toString()).includes(req.user.id)
+    const isStarter = session.startedBy?.toString() === req.user.id
+    if (!isAdmin && !isStarter)
+      return res.status(403).json({ message: 'Only admins or the session starter can end the session' })
+
+    if (session.status !== 'ended') {
+      session.status = 'ended'
+      await session.save()
+    }
+
     clearPrivateMessages(sessionId)
     cleanupPrivateFiles(sessionId)
 

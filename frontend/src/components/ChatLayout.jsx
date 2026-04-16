@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Outlet, useNavigate, useMatch } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useSocket } from '../context/SocketContext'
+import { useTheme } from '../context/ThemeContext'
 import NotificationBell from './NotificationBell'
 import InvitationsDropdown from './InvitationsDropdown'
 import CreateGroupModal from '../pages/CreateGroupModal'
@@ -15,7 +16,8 @@ const useDebounce = (v, d) => {
 
 export default function ChatLayout() {
   const { user, logout } = useAuth()
-  const { notifications } = useSocket()
+  const { notifications, getUnreadCount } = useSocket()
+  const { theme, toggleTheme } = useTheme()
   const navigate = useNavigate()
   const dmMatch    = useMatch('/chat/:userId')
   const groupMatch = useMatch('/chat/group/:groupId')
@@ -190,6 +192,16 @@ export default function ChatLayout() {
             <InvitationsDropdown pending={pendingReceived} onRespond={handleRespond} />
             <NotificationBell />
             <button
+              onClick={() => navigate('/chat/profile')}
+              className="p-2 rounded-full hover:bg-gray-200 transition"
+              title="Profile Settings"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </button>
+            <button
               id="new-group-button"
               onClick={() => setShowCreateGroup(true)}
               className="p-2 rounded-full hover:bg-gray-200 transition"
@@ -216,6 +228,21 @@ export default function ChatLayout() {
               <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
               </svg>
+            </button>
+            <button
+              onClick={toggleTheme}
+              className="p-2 rounded-full hover:bg-gray-200 transition"
+              title={theme === 'light' ? 'Dark Mode' : 'Light Mode'}
+            >
+              {theme === 'light' ? (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                </svg>
+              ) : (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                </svg>
+              )}
             </button>
           </div>
         </div>
@@ -350,6 +377,16 @@ export default function ChatLayout() {
                       <p className="text-base text-gray-900 font-medium truncate">{c.username}</p>
                       <p className="text-sm text-gray-500 truncate">{c.isOnline ? 'Online' : 'Offline'}</p>
                     </div>
+                    {(() => {
+                      const myId = user?.id || user?._id
+                      const convId = [myId, c._id].sort().join('_')
+                      const count = getUnreadCount(convId)
+                      return count > 0 ? (
+                        <span className="w-5 h-5 bg-emerald-500 text-white text-xs font-bold rounded-full flex items-center justify-center flex-shrink-0">
+                          {count > 9 ? '9+' : count}
+                        </span>
+                      ) : null
+                    })()}
                   </div>
                 )
               })
@@ -383,6 +420,14 @@ export default function ChatLayout() {
                       <p className="text-base text-gray-900 font-medium truncate">{g.name}</p>
                       <p className="text-sm text-gray-500 truncate">{g.members?.length} member{g.members?.length !== 1 ? 's' : ''}</p>
                     </div>
+                    {(() => {
+                      const count = getUnreadCount(g._id)
+                      return count > 0 ? (
+                        <span className="w-5 h-5 bg-emerald-500 text-white text-xs font-bold rounded-full flex items-center justify-center flex-shrink-0">
+                          {count > 9 ? '9+' : count}
+                        </span>
+                      ) : null
+                    })()}
                   </div>
                 )
               })

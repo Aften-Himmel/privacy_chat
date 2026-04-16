@@ -10,6 +10,9 @@ const messageSchema = new mongoose.Schema({
   fileType:       { type: String },
   fileSize:       { type: Number },
   deletedFor:     [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  // Read receipts
+  status:         { type: String, enum: ['sent', 'delivered', 'read'], default: 'sent' },
+  readBy:         [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   // NOTE: isPrivate is NOT stored here — private messages never touch the DB
   // They live only in RAM via privateStore.js and are cleared when session ends
 }, { timestamps: true })

@@ -10,13 +10,9 @@ export const SocketProvider = ({ children }) => {
   const [connected, setConnected] = useState(false)
   const [onlineUsers, setOnlineUsers] = useState([])
   const [notifications, setNotifications] = useState([])
+  const [unreadCounts, setUnreadCounts] = useState({}) // conversationId|groupId -> count
 
   // BUG FIX 3: expose a live socket getter instead of the stale ref value.
-  // The original code passed `socketRef.current` as the context value, which
-  // was always null on first render and never updated for consumers that
-  // captured it early (e.g. CreateGroupModal calling socket.emit on mount).
-  // We now expose the ref itself AND a stable `getSocket` helper so callers
-  // always reach the live instance.
   const [, forceUpdate] = useState(0)
 
   useEffect(() => {
@@ -30,7 +26,6 @@ export const SocketProvider = ({ children }) => {
     })
 
     const socket = socketRef.current
-    // Trigger re-render so consumers receive the new socket instance
     forceUpdate(n => n + 1)
 
     socket.on('connect', () => setConnected(true))
@@ -42,6 +37,20 @@ export const SocketProvider = ({ children }) => {
         { ...notification, id: Date.now() + Math.random(), read: false },
         ...prev
       ])
+
+      // Track unread counts for message notifications
+      if (notification.type === 'new_message' && notification.conversationId) {
+        setUnreadCounts(prev => ({
+          ...prev,
+          [notification.conversationId]: (prev[notification.conversationId] || 0) + 1
+        }))
+      }
+      if (notification.type === 'new_group_message' && notification.groupId) {
+        setUnreadCounts(prev => ({
+          ...prev,
+          [notification.groupId]: (prev[notification.groupId] || 0) + 1
+        }))
+      }
     })
 
     return () => {
@@ -77,6 +86,19 @@ export const SocketProvider = ({ children }) => {
     })
   }, [])
 
+  const clearUnread = useCallback((id) => {
+    setUnreadCounts(prev => {
+      if (!prev[id]) return prev
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+  }, [])
+
+  const getUnreadCount = useCallback((id) => {
+    return unreadCounts[id] || 0
+  }, [unreadCounts])
+
   const isUserOnline = (userId) => onlineUsers.includes(userId)
 
   return (
@@ -89,6 +111,8 @@ export const SocketProvider = ({ children }) => {
       clearNotification,
       clearNotificationsForUser,
       isUserOnline,
+      clearUnread,
+      getUnreadCount,
     }}>
       {children}
     </SocketContext.Provider>
