@@ -48,17 +48,26 @@ router.post('/send-code', async (req, res) => {
       return res.status(400).json({ message: 'Username or email already taken' })
     }
     const code = Math.floor(100000 + Math.random() * 900000).toString()
-    await VerificationCode.findOneAndUpdate(
+    const saved = await VerificationCode.findOneAndUpdate(
       { email: email.toLowerCase() },
       { code, expiresAt: new Date(Date.now() + 10 * 60 * 1000) },
-      { upsert: true, returnDocument: 'after' }
+      { upsert: true, new: true }
     )
+    console.log('📧 [send-code] Saved verification:', {
+      email: email.toLowerCase(),
+      code,
+      savedCode: saved?.code,
+      savedEmail: saved?.email,
+      expiresAt: saved?.expiresAt,
+      id: saved?._id,
+    })
     const emailResult = await sendVerificationEmail(email.toLowerCase(), code)
     if (!emailResult.success) {
       return res.status(500).json({ message: 'Failed to send verification email', error: emailResult.error })
     }
     res.status(200).json({ message: 'Verification code sent successfully' })
   } catch (err) {
+    console.error('❌ [send-code] Error:', err)
     res.status(500).json({ message: 'Server error', error: err.message })
   }
 })
@@ -70,18 +79,52 @@ router.post('/register', async (req, res) => {
     if (!username || !email || !password || !code) {
       return res.status(400).json({ message: 'All fields including verification code are required' })
     }
-    const verificationRecord = await VerificationCode.findOne({ email: email.toLowerCase(), code })
+
+    const normalizedEmail = email.toLowerCase().trim()
+    const trimmedCode = String(code).trim()
+
+    console.log('🔍 [register] Looking up code:', { email: normalizedEmail, code: trimmedCode, codeType: typeof code })
+
+    // First check: does ANY record exist for this email?
+    const anyRecord = await VerificationCode.findOne({ email: normalizedEmail })
+    console.log('🔍 [register] Record for email:', anyRecord ? {
+      storedCode: anyRecord.code,
+      storedEmail: anyRecord.email,
+      expiresAt: anyRecord.expiresAt,
+      isExpired: anyRecord.expiresAt < new Date(),
+      codeMatch: anyRecord.code === trimmedCode,
+      codeTypeStored: typeof anyRecord.code,
+    } : 'NO RECORD FOUND')
+
+    // Now do the actual lookup with both email and code
+    const verificationRecord = await VerificationCode.findOne({ email: normalizedEmail, code: trimmedCode })
     if (!verificationRecord) {
-      return res.status(400).json({ message: 'Invalid or expired verification code' })
+      // If we found a record by email but code didn't match, give a specific message
+      if (anyRecord) {
+        console.log('❌ [register] Code mismatch! User sent:', trimmedCode, 'DB has:', anyRecord.code)
+        return res.status(400).json({ message: 'Invalid verification code. Please check and try again.' })
+      }
+      console.log('❌ [register] No record found for email:', normalizedEmail)
+      return res.status(400).json({ message: 'Verification code expired. Please request a new one.' })
     }
+
+    // Check if expired manually (in case TTL hasn't cleaned it up yet)
+    if (verificationRecord.expiresAt < new Date()) {
+      console.log('❌ [register] Code expired:', verificationRecord.expiresAt)
+      await VerificationCode.deleteOne({ _id: verificationRecord._id })
+      return res.status(400).json({ message: 'Verification code has expired. Please request a new one.' })
+    }
+
+    console.log('✅ [register] Code verified successfully for:', normalizedEmail)
+
     const existingUser = await User.findOne({
-      $or: [{ email: email.toLowerCase() }, { username }]
+      $or: [{ email: normalizedEmail }, { username }]
     })
     if (existingUser) {
       return res.status(400).json({ message: 'Username or email already taken' })
     }
     const hashedPassword = await bcrypt.hash(password, 12)
-    const user = await User.create({ username, email, password: hashedPassword })
+    const user = await User.create({ username, email: normalizedEmail, password: hashedPassword })
     await VerificationCode.deleteOne({ _id: verificationRecord._id })
     const token = jwt.sign({ id: user._id, username: user.username }, process.env.JWT_SECRET, { expiresIn: '7d' })
     res.status(201).json({
@@ -90,6 +133,7 @@ router.post('/register', async (req, res) => {
       user: { id: user._id, username: user.username, email: user.email, avatar: user.avatar },
     })
   } catch (err) {
+    console.error('❌ [register] Error:', err)
     res.status(500).json({ message: 'Server error', error: err.message })
   }
 })
