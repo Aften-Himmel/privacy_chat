@@ -5,6 +5,7 @@ import { ThemeProvider } from './context/ThemeContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import Login from './pages/Login'
 import Register from './pages/Register'
+import ForgotPassword from './pages/ForgotPassword'
 import ChatLayout from './components/ChatLayout'
 import ChatWindow from './pages/ChatWindow'
 import GroupWindow from './pages/GroupWindow'
@@ -21,6 +22,7 @@ export default function App() {
             <Route path="/" element={<Navigate to="/login" replace />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/chat" element={<ProtectedRoute><ChatLayout /></ProtectedRoute>}>
               <Route index element={<EmptyChat />} />
               <Route path=":userId" element={<ChatWindow />} />

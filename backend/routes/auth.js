@@ -215,4 +215,69 @@ router.patch('/password', authMiddleware, async (req, res) => {
   }
 })
 
+// ─── FORGOT PASSWORD: SEND CODE ─────────────────────────
+router.post('/forgot-password/send-code', async (req, res) => {
+  try {
+    const { email } = req.body
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' })
+    }
+    const normalizedEmail = email.toLowerCase().trim()
+    const user = await User.findOne({ email: normalizedEmail })
+    if (!user) {
+      return res.status(400).json({ message: 'No account found with this email' })
+    }
+    const code = Math.floor(100000 + Math.random() * 900000).toString()
+    await VerificationCode.findOneAndUpdate(
+      { email: normalizedEmail },
+      { code, expiresAt: new Date(Date.now() + 10 * 60 * 1000) },
+      { upsert: true, new: true }
+    )
+    const emailResult = await sendVerificationEmail(normalizedEmail, code)
+    if (!emailResult.success) {
+      return res.status(500).json({ message: 'Failed to send verification email', error: emailResult.error })
+    }
+    res.status(200).json({ message: 'Verification code sent to your email' })
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message })
+  }
+})
+
+// ─── FORGOT PASSWORD: RESET ─────────────────────────────
+router.post('/forgot-password/reset', async (req, res) => {
+  try {
+    const { email, code, newPassword } = req.body
+    if (!email || !code || !newPassword) {
+      return res.status(400).json({ message: 'Email, verification code, and new password are required' })
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters' })
+    }
+    const normalizedEmail = email.toLowerCase().trim()
+    const trimmedCode = String(code).trim()
+
+    const verificationRecord = await VerificationCode.findOne({ email: normalizedEmail, code: trimmedCode })
+    if (!verificationRecord) {
+      return res.status(400).json({ message: 'Invalid or expired verification code' })
+    }
+    if (verificationRecord.expiresAt < new Date()) {
+      await VerificationCode.deleteOne({ _id: verificationRecord._id })
+      return res.status(400).json({ message: 'Verification code has expired. Please request a new one.' })
+    }
+
+    const user = await User.findOne({ email: normalizedEmail })
+    if (!user) {
+      return res.status(400).json({ message: 'No account found with this email' })
+    }
+
+    user.password = await bcrypt.hash(newPassword, 12)
+    await user.save()
+    await VerificationCode.deleteOne({ _id: verificationRecord._id })
+
+    res.json({ message: 'Password reset successfully. You can now log in.' })
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message })
+  }
+})
+
 export default router
