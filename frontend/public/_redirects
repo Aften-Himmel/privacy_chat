@@ -1,3 +1,0 @@
-# Serve index.html for any route that doesn't match a static file
-# This enables client-side routing (React Router)
-/* /index.html 200
