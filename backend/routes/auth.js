@@ -9,6 +9,13 @@ import authMiddleware from '../middleware/auth.js'
 import VerificationCode from '../models/VerificationCode.js'
 import { sendVerificationEmail } from '../utils/sendEmail.js'
 
+const COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+}
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
@@ -127,6 +134,7 @@ router.post('/register', async (req, res) => {
     const user = await User.create({ username, email: normalizedEmail, password: hashedPassword })
     await VerificationCode.deleteOne({ _id: verificationRecord._id })
     const token = jwt.sign({ id: user._id, username: user.username }, process.env.JWT_SECRET, { expiresIn: '7d' })
+    res.cookie('token', token, COOKIE_OPTIONS)
     res.status(201).json({
       message: 'User registered successfully',
       token,
@@ -147,6 +155,7 @@ router.post('/login', async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password)
     if (!isMatch) return res.status(400).json({ message: 'Invalid email or password' })
     const token = jwt.sign({ id: user._id, username: user.username }, process.env.JWT_SECRET, { expiresIn: '7d' })
+    res.cookie('token', token, COOKIE_OPTIONS)
     res.json({
       message: 'Login successful',
       token,
@@ -278,6 +287,55 @@ router.post('/forgot-password/reset', async (req, res) => {
   } catch (err) {
     res.status(500).json({ message: 'Server error', error: err.message })
   }
+})
+
+// ─── E2E ENCRYPTION: UPLOAD PUBLIC KEY ──────────────────
+router.post('/public-key', authMiddleware, async (req, res) => {
+  try {
+    const { publicKey } = req.body
+    if (!publicKey) return res.status(400).json({ message: 'Public key is required' })
+    await User.findByIdAndUpdate(req.user.id, { publicKey })
+    res.json({ message: 'Public key stored successfully' })
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message })
+  }
+})
+
+// ─── E2E ENCRYPTION: GET USER'S PUBLIC KEY ──────────────
+router.get('/public-key/:userId', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId).select('publicKey')
+    if (!user) return res.status(404).json({ message: 'User not found' })
+    res.json({ publicKey: user.publicKey || '' })
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message })
+  }
+})
+
+// ─── E2E ENCRYPTION: BATCH PUBLIC KEYS (for group E2E) ──
+router.get('/public-keys', authMiddleware, async (req, res) => {
+  try {
+    const ids = req.query.ids?.split(',').filter(Boolean)
+    if (!ids || ids.length === 0) return res.status(400).json({ message: 'ids query param required' })
+    const users = await User.find({ _id: { $in: ids } }).select('_id publicKey')
+    const keyMap = {}
+    for (const u of users) {
+      if (u.publicKey) keyMap[u._id.toString()] = u.publicKey
+    }
+    res.json(keyMap)
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message })
+  }
+})
+
+// ─── LOGOUT ─────────────────────────────────────────────
+router.post('/logout', (req, res) => {
+  res.clearCookie('token', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+  })
+  res.json({ message: 'Logged out successfully' })
 })
 
 export default router

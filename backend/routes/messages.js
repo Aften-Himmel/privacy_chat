@@ -176,7 +176,7 @@ router.post('/:userId', async (req, res) => {
   try {
     const { text } = req.body
     if (!text || !text.trim()) return res.status(400).json({ message: 'Message text is required' })
-    if (text.length > 500) return res.status(400).json({ message: 'Message exceeds 500 characters limit' })
+    if (text.length > 2000) return res.status(400).json({ message: 'Message exceeds character limit' })
 
     const convId = getConvId(req.user.id, req.params.userId)
 
@@ -204,7 +204,7 @@ router.post('/:userId/file', handleUpload, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: 'No file uploaded' })
     const { mode, sessionId, text } = req.body
-    if (text && text.length > 500) return res.status(400).json({ message: 'Message exceeds 500 characters limit' })
+    if (text && text.length > 2000) return res.status(400).json({ message: 'Message exceeds character limit' })
 
     const serverUrl = process.env.SERVER_URL || 'http://localhost:5000'
     const fileUrl = `${serverUrl}/uploads/${req.file.filename}`
@@ -395,7 +395,7 @@ router.post('/:userId/private/message', async (req, res) => {
   try {
     const { text, sessionId } = req.body
     if (!text || !text.trim()) return res.status(400).json({ message: 'Message text is required' })
-    if (text.length > 500) return res.status(400).json({ message: 'Message exceeds 500 characters limit' })
+    if (text.length > 2000) return res.status(400).json({ message: 'Message exceeds character limit' })
 
     const session = await Session.findOne({ _id: sessionId, status: 'active' })
     if (!session) return res.status(400).json({ message: 'No active session' })

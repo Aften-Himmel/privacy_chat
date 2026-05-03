@@ -303,11 +303,11 @@ router.post('/:groupId/messages', async (req, res) => {
     if (!group.members.map(m => m.toString()).includes(req.user.id))
       return res.status(403).json({ message: 'Not a member' })
 
-    const { text } = req.body
+    const { text, encryptedKeys } = req.body
     if (!text?.trim()) return res.status(400).json({ message: 'Message text is required' })
-    if (text.length > 500) return res.status(400).json({ message: 'Message exceeds 500 characters limit' })
+    if (text.length > 5000) return res.status(400).json({ message: 'Message exceeds 5000 characters limit' })
 
-    const message = await Message.create({ groupId: group._id, sender: req.user.id, text })
+    const message = await Message.create({ groupId: group._id, sender: req.user.id, text, encryptedKeys: encryptedKeys || '' })
     const populated = await message.populate('sender', 'username')
 
     const io = req.app.get('io')
@@ -333,7 +333,7 @@ router.post('/:groupId/messages/file', handleUpload, async (req, res) => {
     if (!req.file) return res.status(400).json({ message: 'No file uploaded' })
 
     const { mode, sessionId, text } = req.body
-    if (text && text.length > 500) return res.status(400).json({ message: 'Message exceeds 500 characters limit' })
+    if (text && text.length > 5000) return res.status(400).json({ message: 'Message exceeds 5000 characters limit' })
     const serverUrl = process.env.SERVER_URL || 'http://localhost:5000'
     const fileUrl = `${serverUrl}/uploads/${req.file.filename}`
     const fileData = {
@@ -501,9 +501,9 @@ router.get('/:groupId/private/messages', async (req, res) => {
 // POST /api/groups/:groupId/private/message
 router.post('/:groupId/private/message', async (req, res) => {
   try {
-    const { text, sessionId } = req.body
+    const { text, sessionId, encryptedKeys } = req.body
     if (!text?.trim()) return res.status(400).json({ message: 'Message text is required' })
-    if (text.length > 500) return res.status(400).json({ message: 'Message exceeds 500 characters limit' })
+    if (text.length > 5000) return res.status(400).json({ message: 'Message exceeds 5000 characters limit' })
 
     const session = await GroupSession.findOne({ _id: sessionId, status: 'active' })
     if (!session) return res.status(400).json({ message: 'No active session' })
@@ -515,6 +515,7 @@ router.post('/:groupId/private/message', async (req, res) => {
       _id: crypto.randomUUID(),
       sender: { _id: req.user.id, username: req.user.username },
       text,
+      encryptedKeys: encryptedKeys || '',
       isPrivate: true,
       createdAt: new Date().toISOString(),
     }

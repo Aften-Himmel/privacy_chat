@@ -11,7 +11,14 @@ export const setupSocket = (io) => {
   io._onlineUsers = onlineUsers
 
   io.use((socket, next) => {
-    const token = socket.handshake.auth.token
+    // Try cookie first (HttpOnly), then handshake auth (legacy)
+    let token = null
+    const cookieHeader = socket.handshake.headers.cookie
+    if (cookieHeader) {
+      const match = cookieHeader.match(/(?:^|;\s*)token=([^;]+)/)
+      if (match) token = match[1]
+    }
+    if (!token) token = socket.handshake.auth?.token
     if (!token) return next(new Error('Authentication required'))
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET)

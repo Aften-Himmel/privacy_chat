@@ -1,13 +1,20 @@
 import jwt from 'jsonwebtoken'
 
 const authMiddleware = (req, res, next) => {
-  const authHeader = req.headers.authorization
+  // Priority 1: HttpOnly cookie (preferred — XSS-safe)
+  // Priority 2: Authorization header (fallback for tools/testing)
+  let token = req.cookies?.token
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ message: 'No token provided' })
+  if (!token) {
+    const authHeader = req.headers.authorization
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.split(' ')[1]
+    }
   }
 
-  const token = authHeader.split(' ')[1]
+  if (!token) {
+    return res.status(401).json({ message: 'No token provided' })
+  }
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET)

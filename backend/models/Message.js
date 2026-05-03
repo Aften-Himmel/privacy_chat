@@ -10,6 +10,8 @@ const messageSchema = new mongoose.Schema({
   fileType:       { type: String },
   fileSize:       { type: Number },
   deletedFor:     [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  // E2E: per-member wrapped AES keys for group messages (JSON string: { memberId: wrappedKey })
+  encryptedKeys:  { type: String, default: '' },
   // Read receipts
   status:         { type: String, enum: ['sent', 'delivered', 'read'], default: 'sent' },
   readBy:         [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],

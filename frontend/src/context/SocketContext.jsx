@@ -17,12 +17,9 @@ export const SocketProvider = ({ children }) => {
 
   useEffect(() => {
     if (!user) return
-
-    const token = localStorage.getItem('token')
-
     socketRef.current = io(import.meta.env.VITE_WS_URL || 'http://localhost:5000', {
       transports: ['websocket'],
-      auth: { token },
+      withCredentials: true, // Send HttpOnly cookies automatically
     })
 
     const socket = socketRef.current

@@ -4,6 +4,7 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
+import cookieParser from 'cookie-parser'
 import { createServer } from 'http'
 import { Server } from 'socket.io'
 import path from 'path'
@@ -25,7 +26,11 @@ dotenv.config()
 const app        = express()
 const httpServer = createServer(app)
 const io         = new Server(httpServer, {
-  cors: { origin: process.env.CLIENT_URL, methods: ['GET', 'POST', 'PATCH', 'DELETE'] }
+  cors: {
+    origin: process.env.CLIENT_URL,
+    methods: ['GET', 'POST', 'PATCH', 'DELETE'],
+    credentials: true,
+  }
 })
 
 // Make io accessible inside route handlers via req.app.get('io')
@@ -35,8 +40,12 @@ app.set('io', io)
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' }, // allow cross-origin file downloads
 }))
-app.use(cors({ origin: process.env.CLIENT_URL }))
+app.use(cors({
+  origin: process.env.CLIENT_URL,
+  credentials: true,
+}))
 app.use(express.json())
+app.use(cookieParser())
 
 // ── Rate limiting for auth routes ──
 const authLimiter = rateLimit({

@@ -3,11 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useSocket } from '../context/SocketContext'
 import api from '../api/axios'
-// BUG FIX 7: GroupInfoPanel lives in pages/, not in the same directory.
-// The original import './GroupInfoPanel' would resolve correctly only if
-// GroupWindow.jsx is also in pages/ — which it is — so this was actually fine.
-// Confirmed: both files are in src/pages/, so the relative path is correct.
 import GroupInfoPanel from './GroupInfoPanel'
+import { encryptGroupMessage, decryptGroupMessage } from '../utils/crypto'
+import { loadPrivateKey } from '../utils/keyStore'
 
 export default function GroupWindow() {
   const { groupId } = useParams()
@@ -35,6 +33,34 @@ export default function GroupWindow() {
   const myId = user?.id || user?._id
   const [typingUsers, setTypingUsers] = useState(new Map()) // userId -> username
   const typingTimeoutRef = useRef(null)
+  const groupKeysRef = useRef({}) // memberId -> publicKeyJWK
+
+  // ── E2E Helpers ──
+  const tryDecrypt = async (msg) => {
+    if (!msg.encryptedKeys || !msg.text) return msg
+    try {
+      const parsed = JSON.parse(msg.text)
+      const senderId = (msg.sender?._id || msg.sender).toString()
+      const senderPubKey = groupKeysRef.current[senderId]
+      const privateCryptoKey = await loadPrivateKey()
+      
+      if (parsed.c && parsed.iv && senderPubKey && privateCryptoKey) {
+        const payload = {
+          encrypted: { c: parsed.c, iv: parsed.iv },
+          encryptedKeys: JSON.parse(msg.encryptedKeys)
+        }
+        const plaintext = await decryptGroupMessage(payload, senderPubKey, privateCryptoKey, myId)
+        return { ...msg, text: plaintext !== null ? plaintext : '[Encrypted message]' }
+      }
+    } catch {
+      // Not encrypted or parsing failed
+    }
+    return msg
+  }
+
+  const decryptAll = async (msgs) => {
+    return Promise.all(msgs.map(m => tryDecrypt(m)))
+  }
 
   // Load group + messages + check active session
   useEffect(() => {
@@ -54,14 +80,33 @@ export default function GroupWindow() {
           api.get(`/groups/${groupId}/messages`),
           api.get(`/groups/${groupId}/session/active`),
         ])
-        setGroup(groupRes.data)
-        setNormal(msgsRes.data)
+        const groupData = groupRes.data
+        setGroup(groupData)
+
+        // E2E: Fetch all members' public keys
+        if (groupData?.members?.length > 0) {
+          const memberIds = groupData.members.map(m => m._id || m).join(',')
+          try {
+            const keyRes = await api.get(`/auth/public-keys?ids=${memberIds}`)
+            const keyMap = {}
+            for (const [id, pubStr] of Object.entries(keyRes.data)) {
+              if (pubStr) keyMap[id] = JSON.parse(pubStr)
+            }
+            groupKeysRef.current = keyMap
+          } catch (err) {
+            console.error('Failed to load group public keys:', err)
+          }
+        }
+
+        const decryptedNormal = await decryptAll(msgsRes.data)
+        setNormal(decryptedNormal)
 
         if (sessionRes.data) {
           setMode('private')
           setSessionId(sessionRes.data._id)
           const privateRes = await api.get(`/groups/${groupId}/private/messages`)
-          setPrivate(privateRes.data)
+          const decryptedPrivate = await decryptAll(privateRes.data)
+          setPrivate(decryptedPrivate)
         }
       } catch (err) {
         console.error('Failed to load group chat:', err)
@@ -78,11 +123,17 @@ export default function GroupWindow() {
       if (processedRef.current.has(n.id)) continue
       processedRef.current.add(n.id)
 
-      if (n.type === 'new_group_message' && n.groupId === groupId)
-        setNormal(p => [...p, n.message])
+      if (n.type === 'new_group_message' && n.groupId === groupId) {
+        tryDecrypt(n.message).then(decrypted => {
+          setNormal(p => [...p, decrypted])
+        })
+      }
 
-      if (n.type === 'new_group_private_message' && n.groupId === groupId)
-        setPrivate(p => [...p, n.message])
+      if (n.type === 'new_group_private_message' && n.groupId === groupId) {
+        tryDecrypt(n.message).then(decrypted => {
+          setPrivate(p => [...p, decrypted])
+        })
+      }
 
       if (n.type === 'group_private_session_started' && n.groupId === groupId) {
         setMode('private')
@@ -167,15 +218,15 @@ export default function GroupWindow() {
     const handler = () => {
       const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:5000/api'
       const token = localStorage.getItem('token')
-      // keepalive fetch supports headers (unlike sendBeacon) and survives page unload
+      const headers = { 'Content-Type': 'application/json' }
+      if (token) headers['Authorization'] = `Bearer ${token}`
+      // keepalive fetch + credentials: 'include' sends HttpOnly cookie
       fetch(`${apiBase}/groups/${groupId}/private/end`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
+        headers,
         body: JSON.stringify({ sessionId }),
         keepalive: true,
+        credentials: 'include',
       }).catch(() => {})
     }
     window.addEventListener('beforeunload', handler)
@@ -222,28 +273,47 @@ export default function GroupWindow() {
     if ((!text.trim() && !file) || sending) return
     setSending(true)
     try {
+      // E2E: Encrypt text if group keys are available
+      let textToSend = text
+      let encryptedKeysToSend = ''
+      
+      if (text.trim() && Object.keys(groupKeysRef.current).length > 0) {
+        const privateCryptoKey = await loadPrivateKey()
+        if (privateCryptoKey) {
+          const payload = await encryptGroupMessage(text.trim(), groupKeysRef.current, privateCryptoKey, myId)
+          textToSend = JSON.stringify(payload.encrypted)
+          encryptedKeysToSend = JSON.stringify(payload.encryptedKeys)
+        }
+      }
+
       if (file) {
         const formData = new FormData()
         formData.append('mode', mode)
-        if (text.trim()) formData.append('text', text)
+        if (text.trim()) {
+           formData.append('text', textToSend)
+           if (encryptedKeysToSend) formData.append('encryptedKeys', encryptedKeysToSend)
+        }
         if (mode === 'private') formData.append('sessionId', sessionId)
         formData.append('file', file)
 
         const res = await api.post(`/groups/${groupId}/messages/file`, formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
         })
-        if (mode === 'normal') setNormal(p => [...p, res.data])
-        else setPrivate(p => [...p, res.data])
+        const localMsg = { ...res.data, text: text.trim() ? text : res.data.text }
+        if (mode === 'normal') setNormal(p => [...p, localMsg])
+        else setPrivate(p => [...p, localMsg])
 
         setFile(null)
         if (fileInputRef.current) fileInputRef.current.value = ''
       } else {
         if (mode === 'normal') {
-          const res = await api.post(`/groups/${groupId}/messages`, { text })
-          setNormal(p => [...p, res.data])
+          const res = await api.post(`/groups/${groupId}/messages`, { text: textToSend, encryptedKeys: encryptedKeysToSend })
+          const localMsg = { ...res.data, text }
+          setNormal(p => [...p, localMsg])
         } else {
-          const res = await api.post(`/groups/${groupId}/private/message`, { text, sessionId })
-          setPrivate(p => [...p, res.data])
+          const res = await api.post(`/groups/${groupId}/private/message`, { text: textToSend, sessionId, encryptedKeys: encryptedKeysToSend })
+          const localMsg = { ...res.data, text }
+          setPrivate(p => [...p, localMsg])
         }
       }
       setText('')
@@ -367,7 +437,7 @@ export default function GroupWindow() {
       {mode === 'private' && (
         <div className="bg-purple-50 border-b border-purple-100 px-4 py-2 text-center">
           <p className="text-purple-800 text-xs font-medium">
-            🔒 Group private session — messages are in-memory only and will be wiped when the session ends
+            🔒 Group private session — E2E Encrypted + messages are in-memory only and will be wiped when the session ends
           </p>
         </div>
       )}
@@ -383,7 +453,7 @@ export default function GroupWindow() {
         {!loading && visibleMessages.length === 0 && mode === 'normal' && (
           <div className="flex justify-center py-10">
             <span className="bg-[#fff9c4] text-gray-800 text-xs px-4 py-2 rounded-lg shadow-sm">
-              No messages yet. Say hello to the group! 👋
+              Messages are end-to-end encrypted for all group members. 👋
             </span>
           </div>
         )}

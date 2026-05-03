@@ -1,19 +1,58 @@
 import { createContext, useContext, useState, useEffect } from 'react'
 import api from '../api/axios'
+import { generateKeyPair } from '../utils/crypto'
+import {
+  loadPrivateKey,
+  loadPublicKeyJWK,
+  savePrivateKey,
+  savePublicKeyJWK,
+  clearKeys,
+} from '../utils/keyStore'
 
 const AuthContext = createContext()
 
-// BUG FIX 4: decode the JWT expiry claim without a library and reject tokens
-// that have already expired. Previously, an expired token would keep the user
-// "logged in" in the UI (user state was set from localStorage) but every API
-// call would fail with 401, leading to confusing broken behaviour.
-const isTokenExpired = (token) => {
+// isTokenExpired removed because tokens are securely stored in HttpOnly cookies
+// Ensure E2E key pair exists and public key is uploaded to server
+const ensureE2EKeys = async () => {
   try {
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    // exp is in seconds; Date.now() is in ms
-    return payload.exp * 1000 < Date.now()
-  } catch {
-    return true // malformed token → treat as expired
+    let publicKeyJWK = await loadPublicKeyJWK()
+    let privateCryptoKey = await loadPrivateKey()
+
+    if (!publicKeyJWK || !privateCryptoKey) {
+      // Check if legacy keys exist in localStorage and migrate them
+      const legacyPub = localStorage.getItem('e2e_public_key')
+      const legacyPriv = localStorage.getItem('e2e_private_key')
+
+      if (legacyPub && legacyPriv) {
+        // Migrate: import old JWK private key as non-extractable CryptoKey
+        const privJWK = JSON.parse(legacyPriv)
+        privateCryptoKey = await crypto.subtle.importKey(
+          'jwk',
+          privJWK,
+          { name: 'ECDH', namedCurve: 'P-256' },
+          false, // non-extractable
+          ['deriveKey']
+        )
+        publicKeyJWK = JSON.parse(legacyPub)
+        await savePrivateKey(privateCryptoKey)
+        await savePublicKeyJWK(publicKeyJWK)
+        // Clean up legacy storage
+        localStorage.removeItem('e2e_private_key')
+        localStorage.removeItem('e2e_public_key')
+      } else {
+        // Generate fresh key pair (private key is non-extractable)
+        const kp = await generateKeyPair()
+        publicKeyJWK = kp.publicKeyJWK
+        privateCryptoKey = kp.privateCryptoKey
+        await savePrivateKey(privateCryptoKey)
+        await savePublicKeyJWK(publicKeyJWK)
+      }
+    }
+
+    // Upload public key to server (idempotent)
+    await api.post('/auth/public-key', { publicKey: JSON.stringify(publicKeyJWK) })
+  } catch (err) {
+    console.error('E2E key setup error:', err.message)
   }
 }
 
@@ -22,30 +61,35 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const token = localStorage.getItem('token')
-    const savedUser = localStorage.getItem('user')
-
-    if (token && savedUser) {
-      if (isTokenExpired(token)) {
-        // Clear stale credentials so the user is redirected to login
-        localStorage.removeItem('token')
-        localStorage.removeItem('user')
-      } else {
-        setUser(JSON.parse(savedUser))
+    const checkAuthStatus = async () => {
+      try {
+        const { data } = await api.get('/auth/me');
+        setUser(data);
+        ensureE2EKeys();
+      } catch (err) {
+        // If 401, they are not logged in.
+        setUser(null);
+      } finally {
+        setLoading(false);
       }
-    }
-    setLoading(false)
+    };
+    checkAuthStatus();
   }, [])
 
   const login = (userData, token) => {
-    localStorage.setItem('token', token)
-    localStorage.setItem('user', JSON.stringify(userData))
+    // We no longer save token or user to localStorage.
+    // The backend handles the HttpOnly cookie for the token.
     setUser(userData)
+    ensureE2EKeys()
   }
 
-  const logout = () => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
+  const logout = async () => {
+    try {
+      await api.post('/auth/logout');
+    } catch (err) {
+      console.error('Logout error:', err.message);
+    }
+    await clearKeys()
     setUser(null)
   }
 

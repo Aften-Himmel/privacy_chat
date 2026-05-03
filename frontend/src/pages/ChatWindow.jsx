@@ -3,6 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useSocket } from '../context/SocketContext'
 import api from '../api/axios'
+import { deriveSharedKey, encryptMessage, decryptMessage } from '../utils/crypto'
+import { loadPrivateKey } from '../utils/keyStore'
 
 const getConvId = (a, b) => [a, b].sort().join('_')
 
@@ -32,8 +34,28 @@ export default function ChatWindow() {
   const [pendingSession, setPendingSession] = useState(null) // { sessionId, startedBy }
   const [isTyping, setIsTyping] = useState(false)
   const typingTimeoutRef = useRef(null)
+  const sharedKeyRef = useRef(null) // E2E: derived AES-256-GCM key
 
   const myId = user?.id || user?._id
+
+  // ── E2E Helpers ──
+  const tryDecrypt = async (msg) => {
+    if (!sharedKeyRef.current || !msg.text) return msg
+    try {
+      const parsed = JSON.parse(msg.text)
+      if (parsed.c && parsed.iv) {
+        const plaintext = await decryptMessage(parsed.c, parsed.iv, sharedKeyRef.current)
+        return { ...msg, text: plaintext !== null ? plaintext : '[Encrypted message]' }
+      }
+    } catch {
+      // Not an encrypted message (legacy or parse error) — return as-is
+    }
+    return msg
+  }
+
+  const decryptAll = async (msgs) => {
+    return Promise.all(msgs.map(m => tryDecrypt(m)))
+  }
 
   // ── Load contact + messages + restore active session on mount ──
   useEffect(() => {
@@ -47,6 +69,20 @@ export default function ChatWindow() {
 
     const load = async () => {
       try {
+        // E2E: Derive shared key from contact's public key
+        const privateCryptoKey = await loadPrivateKey()
+        if (privateCryptoKey) {
+          try {
+            const keyRes = await api.get(`/auth/public-key/${userId}`)
+            if (keyRes.data.publicKey) {
+              const contactPubKey = JSON.parse(keyRes.data.publicKey)
+              sharedKeyRef.current = await deriveSharedKey(privateCryptoKey, contactPubKey)
+            }
+          } catch (err) {
+            console.error('E2E key exchange failed:', err.message)
+          }
+        }
+
         const [contactsRes, msgsRes, sessionRes] = await Promise.all([
           api.get('/contacts'),
           api.get(`/messages/${userId}`),
@@ -64,13 +100,17 @@ export default function ChatWindow() {
             setContact({ _id: userId, username: '', isOnline: false })
           }
         }
-        setNormal(msgsRes.data)
+
+        // E2E: Decrypt loaded messages
+        const decrypted = await decryptAll(msgsRes.data)
+        setNormal(decrypted)
 
         if (sessionRes.data) {
           setMode('private')
           setSessionId(sessionRes.data._id)
           const privateRes = await api.get(`/messages/${userId}/private/messages`)
-          setPrivate(privateRes.data)
+          const decryptedPrivate = await decryptAll(privateRes.data)
+          setPrivate(decryptedPrivate)
         }
       } catch (err) {
         console.error('Failed to load chat:', err)
@@ -88,13 +128,19 @@ export default function ChatWindow() {
       processedRef.current.add(n.id)
 
       if (n.type === 'new_message' && n.conversationId === convId) {
-        setNormal(p => [...p, n.message])
+        // E2E: Decrypt incoming real-time message
+        tryDecrypt(n.message).then(decrypted => {
+          setNormal(p => [...p, decrypted])
+        })
         // Send read receipt since user is viewing this chat
         api.post(`/messages/${userId}/messages/read`).catch(() => {})
       }
 
-      if (n.type === 'new_private_message' && n.conversationId === convId)
-        setPrivate(p => [...p, n.message])
+      if (n.type === 'new_private_message' && n.conversationId === convId) {
+        tryDecrypt(n.message).then(decrypted => {
+          setPrivate(p => [...p, decrypted])
+        })
+      }
 
       if (n.type === 'private_session_started' && n.conversationId === convId) {
         const amIStarter = (n.startedBy === myId)
@@ -233,26 +279,38 @@ export default function ChatWindow() {
     if ((!text.trim() && !file) || sending) return
     setSending(true)
     try {
+      // E2E: Encrypt text if shared key is available
+      let textToSend = text
+      if (text.trim() && sharedKeyRef.current) {
+        const { ciphertext, iv } = await encryptMessage(text, sharedKeyRef.current)
+        textToSend = JSON.stringify({ c: ciphertext, iv })
+      }
+
       if (file) {
         const formData = new FormData()
         formData.append('mode', mode)
-        if (text.trim()) formData.append('text', text)
+        if (text.trim()) formData.append('text', textToSend)
         if (mode === 'private') formData.append('sessionId', sessionId)
         formData.append('file', file)
         const res = await api.post(`/messages/${userId}/file`, formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
         })
-        if (mode === 'normal') setNormal(p => [...p, res.data])
-        else setPrivate(p => [...p, res.data])
+        // Show plaintext locally (we already have it)
+        const localMsg = { ...res.data, text: text.trim() ? text : res.data.text }
+        if (mode === 'normal') setNormal(p => [...p, localMsg])
+        else setPrivate(p => [...p, localMsg])
         setFile(null)
         if (fileInputRef.current) fileInputRef.current.value = ''
       } else {
         if (mode === 'normal') {
-          const res = await api.post(`/messages/${userId}`, { text })
-          setNormal(p => [...p, res.data])
+          const res = await api.post(`/messages/${userId}`, { text: textToSend })
+          // Show plaintext locally
+          const localMsg = { ...res.data, text }
+          setNormal(p => [...p, localMsg])
         } else {
-          const res = await api.post(`/messages/${userId}/private/message`, { text, sessionId })
-          setPrivate(p => [...p, res.data])
+          const res = await api.post(`/messages/${userId}/private/message`, { text: textToSend, sessionId })
+          const localMsg = { ...res.data, text }
+          setPrivate(p => [...p, localMsg])
         }
       }
       setText('')
