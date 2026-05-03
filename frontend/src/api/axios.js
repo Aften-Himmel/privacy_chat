@@ -5,12 +5,17 @@ const api = axios.create({
   withCredentials: true, // Send HttpOnly cookies automatically
 })
 
-// Handle 401 responses by clearing stale credentials and redirecting
+// Handle 401 responses by redirecting, but avoid infinite loops on the login page or auth check
 api.interceptors.response.use(
   res => res,
   err => {
     if (err.response?.status === 401) {
-      window.location.href = '/login'
+      const isAuthCheck = err.config.url.endsWith('/auth/me')
+      const isAuthPage = window.location.pathname === '/login' || window.location.pathname === '/register'
+      
+      if (!isAuthCheck && !isAuthPage) {
+        window.location.href = '/login'
+      }
     }
     return Promise.reject(err)
   }
