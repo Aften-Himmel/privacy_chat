@@ -6,6 +6,10 @@ import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
 import cookieParser from 'cookie-parser'
 import { createServer } from 'http'
+import dns from 'dns'
+
+// Force IPv4-first DNS resolution for Render free tier
+dns.setDefaultResultOrder('ipv4first')
 import { Server } from 'socket.io'
 import path from 'path'
 import fs from 'fs'
