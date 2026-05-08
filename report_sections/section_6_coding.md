@@ -226,13 +226,17 @@ router.post('/register', async (req, res) => {
     })
     await VerificationCode.deleteOne({ _id: verificationRecord._id })
 
-    // Sign JWT with 7-day expiry
+    // Sign JWT with 7-day expiry and set as HttpOnly cookie
     const token = jwt.sign(
       { id: user._id, username: user.username },
       process.env.JWT_SECRET, { expiresIn: '7d' }
     )
+    res.cookie('token', token, {
+      httpOnly: true, secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', maxAge: 604800000
+    })
     res.status(201).json({
-      message: 'User registered successfully', token,
+      message: 'User registered successfully',
       user: { id: user._id, username: user.username, email: user.email }
     })
   } catch (err) {
@@ -257,8 +261,12 @@ router.post('/login', async (req, res) => {
       { id: user._id, username: user.username },
       process.env.JWT_SECRET, { expiresIn: '7d' }
     )
+    res.cookie('token', token, {
+      httpOnly: true, secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', maxAge: 604800000
+    })
     res.json({
-      message: 'Login successful', token,
+      message: 'Login successful',
       user: { id: user._id, username: user.username, email: user.email, avatar: user.avatar }
     })
   } catch (err) {
@@ -480,11 +488,10 @@ export const sendNotification = (io, toUserId, notification) => {
 import jwt from 'jsonwebtoken'
 
 const authMiddleware = (req, res, next) => {
-  const authHeader = req.headers.authorization
-  if (!authHeader || !authHeader.startsWith('Bearer '))
-    return res.status(401).json({ message: 'No token provided' })
+  // Extract token from HttpOnly cookie
+  const token = req.cookies?.token
+  if (!token) return res.status(401).json({ message: 'No token provided' })
 
-  const token = authHeader.split(' ')[1]
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET)
     req.user = decoded  // { id, username, iat, exp }
@@ -506,41 +513,33 @@ import { createContext, useContext, useState, useEffect } from 'react'
 
 const AuthContext = createContext()
 
-// Decode JWT expiry without a library — reject expired tokens
-const isTokenExpired = (token) => {
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    return payload.exp * 1000 < Date.now()
-  } catch { return true }
-}
-
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const token = localStorage.getItem('token')
-    const savedUser = localStorage.getItem('user')
-    if (token && savedUser) {
-      if (isTokenExpired(token)) {
-        localStorage.removeItem('token')
-        localStorage.removeItem('user')
-      } else {
-        setUser(JSON.parse(savedUser))
+    // Validate session on load using the HttpOnly cookie
+    const checkAuthStatus = async () => {
+      try {
+        const { data } = await api.get('/auth/me');
+        setUser(data);
+      } catch (err) {
+        setUser(null);
+      } finally {
+        setLoading(false);
       }
-    }
-    setLoading(false)
+    };
+    checkAuthStatus();
   }, [])
 
-  const login = (userData, token) => {
-    localStorage.setItem('token', token)
-    localStorage.setItem('user', JSON.stringify(userData))
+  const login = (userData) => {
     setUser(userData)
   }
 
-  const logout = () => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
+  const logout = async () => {
+    try {
+      await api.post('/auth/logout'); // Clears the HttpOnly cookie
+    } catch (err) { console.error(err.message) }
     setUser(null)
   }
 
@@ -562,23 +561,20 @@ import axios from 'axios'
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:5000/api',
+  withCredentials: true, // Send HttpOnly cookies automatically
 })
 
-// Automatically attach JWT token to every request
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token')
-  if (token) config.headers.Authorization = `Bearer ${token}`
-  return config
-})
-
-// Handle 401 responses by clearing stale credentials and redirecting
+// Handle 401 responses by redirecting to login safely
 api.interceptors.response.use(
   res => res,
   err => {
     if (err.response?.status === 401) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('user')
-      window.location.href = '/login'
+      const isAuthCheck = err.config.url.endsWith('/auth/me');
+      const isAuthPage = window.location.pathname === '/login' || window.location.pathname === '/register';
+      
+      if (!isAuthCheck && !isAuthPage) {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(err)
   }

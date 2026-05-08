@@ -37,11 +37,11 @@ Privacy Chat addresses this gap by providing a dual-mode messaging architecture 
 | ID | Requirement | Priority | Module |
 |----|-------------|----------|--------|
 | FR-01 | User registration with email verification (6-digit OTP via SMTP) | High | Authentication |
-| FR-02 | User login with email and password, JWT-based authentication | High | Authentication |
+| FR-02 | User login with email and password, JWT-based authentication via `HttpOnly` Cookies | High | Authentication |
 | FR-03 | Password recovery via email verification code | High | Authentication |
 | FR-04 | Invitation-based contact system (send, accept, decline invitations) | High | Contacts |
-| FR-05 | One-to-one (DM) text messaging with 500-character limit | High | Messaging |
-| FR-06 | Group chat with text messaging (create, join, leave, member management) | High | Groups |
+| FR-05 | One-to-one (DM) text messaging with E2E Encryption | High | Messaging |
+| FR-06 | Group chat with text messaging featuring Group E2E Encryption | High | Groups |
 | FR-07 | Private/Ephemeral messaging mode for DMs (RAM-only, session-based) | High | Private Sessions |
 | FR-08 | Private/Ephemeral messaging mode for Groups (admin-initiated) | High | Private Sessions |
 | FR-09 | File sharing in DMs and groups (images, docs, audio, video; up to 100 MB) | Medium | Messaging |
@@ -66,7 +66,7 @@ Privacy Chat addresses this gap by providing a dual-mode messaging architecture 
 | NFR-01 | Response time under 200ms for API calls under normal load | Performance |
 | NFR-02 | WebSocket message delivery latency under 100ms | Performance |
 | NFR-03 | Support for concurrent users via Socket.IO's event-driven architecture | Scalability |
-| NFR-04 | bcrypt password hashing (12 salt rounds), JWT with 7-day expiry, Helmet HTTP headers, rate limiting | Security |
+| NFR-04 | bcrypt password hashing (12 salt rounds), JWT with 7-day expiry via HttpOnly Cookies, Web Crypto API with IndexedDB | Security |
 | NFR-05 | Cross-browser compatibility (Chrome, Firefox, Edge, Safari) | Compatibility |
 | NFR-06 | Responsive design for desktop and mobile viewports | Usability |
 | NFR-07 | CORS enforcement restricting API access to the frontend domain only | Security |
@@ -171,7 +171,7 @@ gantt
 ```mermaid
 flowchart TD
     subgraph "Privacy Chat — Primary Use Cases"
-        UC1["🔐 Register / Login\n(Email OTP + JWT)"]
+        UC1["🔐 Register / Login\n(Email OTP + Secure Cookie JWT)"]
         UC2["👥 Manage Contacts\n(Search, Invite, Remove)"]
         UC3["💬 Send DM Messages\n(Text + Files)"]
         UC4["👥 Group Chat\n(Create, Message, Admin)"]

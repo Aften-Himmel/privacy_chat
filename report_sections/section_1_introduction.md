@@ -27,7 +27,9 @@ The primary objectives of this project are:
 
 3. Build a feature-complete messaging platform supporting one-to-one DM messaging, group chats, file sharing (images, documents, audio, video up to 100 MB), real-time typing indicators, read receipts, unread message badges, and bulk message deletion.
 
-4. Implement a secure authentication system using email-verified registration (6-digit OTP via SMTP), JWT-based stateless authentication, bcrypt password hashing, and a password recovery flow.
+4. Implement a secure authentication system using email-verified registration (6-digit OTP via SMTP), JWT-based stateless authentication over secure `HttpOnly` cookies, bcrypt password hashing, and a password recovery flow.
+
+5. Secure user privacy through fully End-to-End Encrypted (E2E) communication applicable to both direct messages and group chats, ensuring the server cannot read message content. Decryption keys are stored using non-extractable `CryptoKey` objects inside IndexedDB.
 
 5. Develop an invitation-based contact management system that prevents unsolicited messaging, with mutual contact addition, real-time invitation notifications, and cascading cleanup on contact removal.
 
@@ -41,11 +43,11 @@ The scope of this project encompasses:
 
 - User Authentication & Management: Registration with email OTP verification, login, profile management (avatar upload, username/password changes), and password recovery.
 - Contact System: Invitation-based contact management with user search, invitation send/accept/decline, and mutual contact removal with cascading data cleanup.
-- Direct Messaging: Real-time one-to-one chat with text messages (500-character limit), file sharing, read receipts, and message deletion.
-- Group Messaging: Group creation, member and admin management, group chat with text and file sharing, and group deletion with message cascade.
-- Private Sessions: Ephemeral messaging for both DMs and groups, with RAM-only storage, session lifecycle management, and automatic cleanup on all exit paths (explicit end, disconnect, tab close via Beacon API, server restart).
+- Direct Messaging: Real-time one-to-one chat with text messages, file sharing, read receipts, and message deletion. E2E encrypted.
+- Group Messaging: Group creation, member and admin management, group chat with text and file sharing, and group deletion. E2E encrypted.
+- Private Sessions: Ephemeral messaging for both DMs and groups, with RAM-only storage, session lifecycle management, and automatic cleanup.
 - UX Features: Typing indicators, unread message badges, online/offline status, real-time notification bell, and dark/light theme toggle.
-- Security: JWT authentication, bcrypt hashing, Helmet HTTP headers, rate limiting, CORS enforcement, MIME-type whitelisting, and filename sanitisation.
+- Security: End-to-End Encryption (E2E), JWT authentication via `HttpOnly` cookies, bcrypt hashing, Helmet HTTP headers, rate limiting, CORS enforcement, and input sanitisation.
 
 ## 1.5 Technology Stack Summary
 
@@ -54,7 +56,7 @@ The scope of this project encompasses:
 | Frontend | React 19, Vite 7, Tailwind CSS 4, React Router 7, Axios, Socket.IO Client 4 |
 | Backend | Node.js 18+, Express 5, Socket.IO 4, Multer, Nodemailer, Helmet, express-rate-limit |
 | Database | MongoDB Atlas (Mongoose 9 ODM) |
-| Authentication | JWT (jsonwebtoken), bcrypt |
+| Authentication & E2E | JWT (HttpOnly Cookies), bcrypt, Web Crypto API, IndexedDB |
 | Deployment | Render (backend + frontend), Git/GitHub CI/CD |
 
 ## 1.6 Report Organisation

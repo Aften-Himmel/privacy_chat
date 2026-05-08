@@ -60,13 +60,16 @@ Architectural Highlights:
 ### 4.2.1 Backend Components
 
 ```mermaid
-flowchart LR
+flowchart TD
     subgraph "Backend Component Architecture"
+        direction TB
         subgraph "Entry Point"
+            direction TB
             SERVER["server.js\n(HTTP + Socket.IO Init)"]
         end
 
         subgraph "Middleware Layer"
+            direction TB
             HELM["helmet\n(Security Headers)"]
             CORS_MW["cors\n(Origin Control)"]
             RATE["express-rate-limit\n(Auth Throttle)"]
@@ -75,6 +78,7 @@ flowchart LR
         end
 
         subgraph "Route Layer"
+            direction TB
             R_AUTH["routes/auth.js\n(Register, Login,\nVerify, Recover)"]
             R_CONT["routes/contacts.js\n(Search, Remove)"]
             R_MSG["routes/messages.js\n(DM, Private,\nFiles, Delete)"]
@@ -83,6 +87,7 @@ flowchart LR
         end
 
         subgraph "Model Layer"
+            direction TB
             M_USER["User"]
             M_MSG["Message"]
             M_GRP["Group"]
@@ -93,11 +98,13 @@ flowchart LR
         end
 
         subgraph "Socket Layer"
+            direction TB
             SM["socketManager.js\n(Connection, Events,\nPresence, Cleanup)"]
             PS["privateStore.js\n(RAM Map Store)"]
         end
 
         subgraph "Utilities"
+            direction TB
             MAIL["utils/email.js\n(Nodemailer SMTP)"]
         end
     end
@@ -117,22 +124,27 @@ flowchart LR
 ```mermaid
 flowchart TD
     subgraph "Frontend Component Architecture"
+        direction TB
         subgraph "Providers (Context Layer)"
+            direction TB
             AUTH_CTX["AuthContext\n(User State, Login/Logout)"]
             SOCK_CTX["SocketContext\n(Socket.IO Connection)"]
             THEME_CTX["ThemeContext\n(Dark/Light Mode)"]
         end
 
         subgraph "Routing Layer"
+            direction TB
             ROUTER["BrowserRouter\n(React Router 7)"]
             PROT["ProtectedRoute\n(JWT Gate)"]
         end
 
         subgraph "Layout"
+            direction TB
             LAYOUT["ChatLayout\n(Sidebar + Content)"]
         end
 
         subgraph "Page Components"
+            direction TB
             LOGIN["Login"]
             REG["Register"]
             FORGOT["ForgotPassword"]
@@ -143,6 +155,7 @@ flowchart TD
         end
 
         subgraph "UI Components"
+            direction TB
             NOTIF["NotificationBell\n(Alerts Dropdown)"]
             INV_DD["InvitationsDropdown\n(Pending Invites)"]
             GRP_INFO["GroupInfoPanel\n(Members, Settings)"]
@@ -150,6 +163,7 @@ flowchart TD
         end
 
         subgraph "API Layer"
+            direction TB
             AXIOS_API["api/axios.js\n(Interceptors)"]
         end
     end
@@ -174,16 +188,20 @@ flowchart TD
 ```mermaid
 flowchart TB
     subgraph "User Device"
+        direction TB
         BROWSER["🌐 Web Browser\n(Chrome / Firefox / Edge / Safari)"]
     end
 
     subgraph "Render Cloud Platform"
+        direction TB
         subgraph "Frontend Service (Static Site)"
+            direction TB
             FE_BUILD["Vite Production Build\n(dist/ directory)"]
             FE_ROUTES["SPA Rewrite Rules\n(/* → index.html)"]
         end
 
         subgraph "Backend Service (Web Service)"
+            direction TB
             NODE["Node.js 18+ Runtime"]
             EXPRESS_SRV["Express 5 HTTP Server\n(Port from env)"]
             SOCKET_SRV["Socket.IO 4 Server\n(Attached to HTTP)"]
@@ -192,6 +210,7 @@ flowchart TB
     end
 
     subgraph "External Services"
+        direction TB
         ATLAS[("MongoDB Atlas\nM0 Free Cluster\n(Cloud Database)")]
         GMAIL["Gmail SMTP\n(Email Delivery)"]
         GITHUB["GitHub Repository\n(Source Code + CI/CD)"]
@@ -385,6 +404,7 @@ classDiagram
         +String password
         +String avatar
         +Boolean isOnline
+        +String publicKey
         +ObjectId[] contacts
         +Date createdAt
         +Date updatedAt

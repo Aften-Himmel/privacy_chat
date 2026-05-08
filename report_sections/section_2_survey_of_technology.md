@@ -78,8 +78,8 @@ Axios is a promise-based HTTP client for both browser and Node.js environments, 
 
 Privacy Chat uses Axios with two critical interceptors:
 
-- Request Interceptor: Automatically retrieves the JWT token from `localStorage` and attaches it to the `Authorization` header of every outgoing HTTP request. This eliminates the need to manually pass authentication credentials in each API call throughout the application.
-- Response Interceptor: Detects `401 Unauthorized` responses indicating expired or invalid tokens, automatically clears stale credentials from `localStorage`, and redirects the user to the login page. This provides a seamless session expiry experience without requiring manual error handling in every component.
+- Request Configuration: Automatically configures Axios to include `HttpOnly` cookies via `withCredentials: true`, eliminating the need to manually pass authentication credentials while protecting against Cross-Site Scripting (XSS).
+- Response Interceptor: Detects `401 Unauthorized` responses indicating expired or invalid tokens and conditionally redirects the user to the login page, while safely ignoring checks made to `/api/auth/me` to prevent infinite redirect loops.
 - Base URL Configuration: The API base URL is configured via the `VITE_API_URL` environment variable, allowing seamless switching between the local development server (`http://localhost:5000/api`) and the production deployment (`https://backend.onrender.com/api`) without any code modifications.
 
 ### 2.1.6 Socket.IO Client 4
@@ -94,7 +94,7 @@ Privacy Chat's Socket.IO client handles the following real-time events:
 
 - Events Emitted to Server: `typing:start`, `typing:stop`, `message:read`, `beacon:cleanup` (sent via the Beacon API when a browser tab is closing)
 - Events Received from Server: `notification:receive` (new messages, invitation alerts, private session lifecycle events), `users:online` (broadcast of currently connected user IDs), `typing:start`, `typing:stop` (typing indicator updates)
-- Authentication: The JWT token is passed via `socket.handshake.auth.token` during the initial WebSocket handshake. The server-side Socket.IO middleware verifies this token before allowing the connection to proceed.
+- Authentication: The backend Socket.IO middleware automatically extracts the JWT token from the `cookie` headers transmitted during the initial WebSocket handshake. It verifies this token before allowing the connection to proceed.
 - Automatic Reconnection: Socket.IO's built-in reconnection engine automatically attempts to re-establish the connection when network interruptions occur, using configurable exponential backoff delays to avoid overwhelming the server.
 
 ---
@@ -144,7 +144,7 @@ Core features implemented in Privacy Chat:
 - Online Presence Tracking: A `Map<userId, socketId>` data structure maintains the mapping between authenticated user IDs and their active socket connections. The full list of online user IDs is broadcast to all connected clients whenever a user connects or disconnects.
 - Targeted Message Delivery: The `sendNotification()` helper function looks up a specific user's socket ID from the online users map and emits events directly to that individual socket, avoiding the overhead and privacy concerns of broadcasting to all connected clients.
 - Room-Based Group Communication: When a user connects, they are automatically joined to Socket.IO rooms named `group:<groupId>` for each group they belong to. This enables efficient group-wide event broadcasting (messages, typing indicators, session events) without iterating over individual member sockets.
-- JWT Authentication Middleware: A custom Socket.IO middleware intercepts every new connection attempt, extracts the JWT token from the handshake authentication payload, verifies it against the server secret, and rejects unauthenticated connections before they can receive any events.
+- JWT Authentication Middleware: A custom Socket.IO middleware intercepts every new connection attempt, extracts the JWT token from the secure `cookie` header, verifies it against the server secret, and rejects unauthenticated connections before they can receive any events.
 - Disconnect Cleanup: When a socket disconnects (whether due to network failure, tab closure, or browser exit), the server automatically ends any active private sessions for that user and clears the associated in-memory messages, ensuring no orphaned ephemeral data remains.
 
 ### 2.2.4 MongoDB Atlas and Mongoose 9
@@ -181,9 +181,10 @@ JSON Web Tokens (JWT) are an open standard (RFC 7519) for securely transmitting 
 Privacy Chat's JWT implementation:
 
 - Token Payload: `{ id: userId, username: username, iat: issuedAt, exp: expiryTimestamp }`
+- Token Storage: Tokens are exclusively stored in `HttpOnly`, `Secure`, and `SameSite` cookies, rendering them inaccessible to client-side JavaScript and protecting the application against XSS token theft. (Previous iterations used `localStorage`, which was migrated for security hardening).
 - Token Lifetime: 7-day expiry (`expiresIn: '7d'`), balancing user convenience (avoiding frequent re-logins) with security (limiting the window of exposure for a compromised token).
 - Signing Algorithm: HMAC-SHA256 (HS256) using a server-side secret stored in the `JWT_SECRET` environment variable. This symmetric signing algorithm ensures that tokens can only be generated and verified by the server.
-- Dual Verification: Tokens are verified in two places: the Express HTTP middleware (for REST API requests) and the Socket.IO connection middleware (for WebSocket connections), ensuring unified authentication across both communication channels.
+- Dual Verification: Tokens are verified in two places: the Express HTTP middleware (by parsing `req.cookies.token` for REST API requests) and the Socket.IO connection middleware (by parsing handshake `cookie` headers for WebSocket connections), ensuring unified authentication across both communication channels.
 
 ### 2.2.6 bcrypt 6
 

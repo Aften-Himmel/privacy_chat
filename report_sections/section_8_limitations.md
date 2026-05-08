@@ -8,8 +8,8 @@ Despite its comprehensive feature set, Privacy Chat has several known limitation
 
 | # | Limitation | Impact | Mitigation Path |
 |---|-----------|--------|-----------------|
-| 1 | No Perfect Forward Secrecy | Currently uses static ECDH keys for E2E encryption. If a user's private key is ever compromised, past intercepted messages could potentially be decrypted. | Implement the Double Ratchet algorithm (Signal Protocol) for per-message key rotation. |
-| 2 | Unencrypted Metadata | While message contents are E2E encrypted, metadata (who is messaging whom, when, and timestamps) is stored in plaintext on the server. | Implement techniques like sealed sender or metadata obfuscation routing. |
+| 1 | No Perfect Forward Secrecy | Currently uses static ECDH keys for E2E encryption (which now successfully covers both 1:1 DMs and Group Messaging). If a user's private key is ever compromised, past intercepted messages could potentially be decrypted. | Implement the Double Ratchet algorithm (Signal Protocol) for per-message key rotation. |
+| 2 | Unencrypted Metadata | While message contents are E2E encrypted across all chat modes, metadata (who is messaging whom, when, and timestamps) is stored in plaintext on the server. | Implement techniques like sealed sender or metadata obfuscation routing. |
 
 ## 8.2 Scalability Limitations
 

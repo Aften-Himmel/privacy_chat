@@ -85,17 +85,16 @@ erDiagram
     }
 
     USERS ||--o{ MESSAGES : "sends (via sender)"
-    USERS }o--o{ USERS : "contacts (self-referencing M:M)"
     USERS ||--o{ INVITATIONS : "sends (via from)"
     USERS ||--o{ INVITATIONS : "receives (via to)"
-    USERS }o--o{ GROUPS : "member of (via members[])"
+    GROUPS ||--o{ USERS : "contains members (via members[])"
     USERS ||--o{ GROUPS : "creates (via creator)"
-    USERS }o--o{ SESSIONS : "participates in"
-    USERS }o--o{ GROUPSESSIONS : "participates in"
+    SESSIONS ||--o{ USERS : "contains participants"
+    GROUPSESSIONS ||--o{ USERS : "contains participants"
     GROUPS ||--o{ MESSAGES : "contains (via groupId)"
     GROUPS ||--o{ GROUPSESSIONS : "has (via groupId)"
-    USERS }o--o{ MESSAGES : "soft-deleted for (via deletedFor[])"
-    USERS }o--o{ MESSAGES : "read by (via readBy[])"
+    MESSAGES ||--o{ USERS : "soft-deleted for (via deletedFor[])"
+    MESSAGES ||--o{ USERS : "read by (via readBy[])"
 ```
 
 ### Relationship Descriptions
