@@ -1,9 +1,26 @@
 import nodemailer from 'nodemailer'
+import dns from 'dns'
+
+// Force IPv4-first DNS resolution for Render free tier
+dns.setDefaultResultOrder('ipv4first')
+
+// Helper to resolve host to IPv4 manually
+const getIPv4Host = (hostname) => {
+  return new Promise((resolve) => {
+    dns.lookup(hostname, { family: 4 }, (err, address) => {
+      resolve(address || hostname)
+    })
+  })
+}
 
 async function createTransporter() {
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-    console.log('📧 Creating SMTP transporter with:', {
-      host: process.env.SMTP_HOST,
+    const originalHost = process.env.SMTP_HOST
+    const resolvedIPv4 = await getIPv4Host(originalHost)
+
+    console.log('📧 Creating SMTP transporter (V4-fix) with:', {
+      host: resolvedIPv4,
+      originalHost,
       port: Number(process.env.SMTP_PORT) || 587,
       secure: process.env.SMTP_SECURE === 'true',
       user: process.env.SMTP_USER,
@@ -12,16 +29,19 @@ async function createTransporter() {
     })
 
     const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
+      host: resolvedIPv4,  // Use explicit IPv4 address
       port: Number(process.env.SMTP_PORT) || 587,
       secure: process.env.SMTP_SECURE === 'true',
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
       },
-      connectionTimeout: 10000,  // 10s to establish connection
-      greetingTimeout: 10000,    // 10s for SMTP greeting
-      socketTimeout: 15000,      // 15s for socket inactivity
+      tls: {
+        servername: originalHost // Keep TLS certificate validation happy
+      },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
     })
 
     // Verify the SMTP connection works
