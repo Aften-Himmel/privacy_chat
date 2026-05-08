@@ -78,36 +78,20 @@ app.use('/api/invitations', invitationRoutes)
 
 app.use('/api/messages', messageRoutes)
 
-// ── Email health-check (temporary diagnostic) ──
+// ── Email health-check (Resend) ──
 app.get('/api/health/email', async (req, res) => {
   try {
-    const nodemailer = await import('nodemailer')
-    const config = {
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT) || 587,
-      secure: process.env.SMTP_SECURE === 'true',
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS ? '***SET***' : '***MISSING***',
-      },
-    }
-    console.log('📧 Email health check — config:', config)
+    const apiKeySet = !!process.env.RESEND_API_KEY
+    const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev'
 
-    if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
-      return res.status(500).json({ status: 'FAIL', reason: 'SMTP env vars missing', config })
+    if (!apiKeySet) {
+      return res.status(500).json({ status: 'FAIL', reason: 'RESEND_API_KEY env var missing' })
     }
 
-    const transporter = nodemailer.default.createTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT) || 587,
-      secure: process.env.SMTP_SECURE === 'true',
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    })
-    await transporter.verify()
-    res.json({ status: 'OK', message: 'SMTP connection verified', config })
+    res.json({ status: 'OK', message: 'Resend API key is configured', from: fromEmail })
   } catch (err) {
     console.error('❌ Email health check failed:', err.message)
-    res.status(500).json({ status: 'FAIL', error: err.message, code: err.code })
+    res.status(500).json({ status: 'FAIL', error: err.message })
   }
 })
 

@@ -1,105 +1,42 @@
-import nodemailer from 'nodemailer'
-import dns from 'dns'
+import { Resend } from 'resend';
 
-// Force IPv4-first DNS resolution for Render free tier
-dns.setDefaultResultOrder('ipv4first')
+// Lazily initialized Resend client
+let resendClient = null;
 
-// Helper to resolve host to IPv4 manually
-const getIPv4Host = (hostname) => {
-  return new Promise((resolve) => {
-    dns.lookup(hostname, { family: 4 }, (err, address) => {
-      resolve(address || hostname)
-    })
-  })
-}
-
-async function createTransporter() {
-  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-    const originalHost = process.env.SMTP_HOST
-    const resolvedIPv4 = await getIPv4Host(originalHost)
-
-    console.log('📧 Creating SMTP transporter (V4-fix) with:', {
-      host: resolvedIPv4,
-      originalHost,
-      port: Number(process.env.SMTP_PORT) || 587,
-      secure: process.env.SMTP_SECURE === 'true',
-      user: process.env.SMTP_USER,
-      // Don't log the password, just confirm it exists
-      passSet: !!process.env.SMTP_PASS,
-    })
-
-    const transporter = nodemailer.createTransport({
-      host: resolvedIPv4,  // Use explicit IPv4 address
-      port: Number(process.env.SMTP_PORT) || 587,
-      secure: process.env.SMTP_SECURE === 'true',
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-      },
-      tls: {
-        servername: originalHost // Keep TLS certificate validation happy
-      },
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 15000,
-    })
-
-    // Verify the SMTP connection works
-    try {
-      await transporter.verify()
-      console.log('✅ SMTP connection verified successfully')
-    } catch (verifyErr) {
-      console.error('❌ SMTP connection verification FAILED:', verifyErr.message)
-      throw verifyErr
+function getResendClient() {
+  if (!resendClient) {
+    if (!process.env.RESEND_API_KEY) {
+      console.warn('⚠️ RESEND_API_KEY is not set in environment variables!');
+      // Return a dummy client if missing, preventing crashes but warning the user
+      return {
+        emails: {
+          send: async () => {
+             console.error('❌ Cannot send email: RESEND_API_KEY missing.');
+             throw new Error('RESEND_API_KEY is missing');
+          }
+        }
+      };
     }
-
-    return transporter
-  } else {
-    console.warn('⚠️  SMTP env vars missing! SMTP_HOST:', !!process.env.SMTP_HOST,
-      'SMTP_USER:', !!process.env.SMTP_USER, 'SMTP_PASS:', !!process.env.SMTP_PASS)
-    // Fall back to Ethereal (test email) — emails won't reach real inboxes
-    const testAccount = await nodemailer.createTestAccount()
-    console.log('Using Ethereal Mail for testing. Login at https://ethereal.email')
-    console.log('Ethereal user:', testAccount.user)
-    return nodemailer.createTransport({
-      host: 'smtp.ethereal.email',
-      port: 587,
-      secure: false,
-      auth: {
-        user: testAccount.user,
-        pass: testAccount.pass,
-      },
-    })
+    // Initialize standard client
+    resendClient = new Resend(process.env.RESEND_API_KEY);
+    console.log('✅ Resend client initialized');
   }
-}
-
-// Lazy singleton — initialised once, re-used across requests
-let transporterPromise = null
-
-function getTransporter() {
-  if (!transporterPromise) {
-    transporterPromise = createTransporter().catch(err => {
-      // Reset so the next call retries
-      transporterPromise = null
-      throw err
-    })
-  }
-  return transporterPromise
+  return resendClient;
 }
 
 export const sendVerificationEmail = async (to, code) => {
   try {
-    const transporter = await getTransporter()
+    const resend = getResendClient();
 
-    // Use the authenticated SMTP user as the from address
-    // Gmail ignores custom from addresses and replaces with the authenticated user
-    const fromAddress = process.env.SMTP_USER || 'no-reply@privacychat.local'
+    // From address must be verified in Resend dashboard
+    // typically onboarding@resend.dev works for testing only to the registered email
+    const fromAddress = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
 
-    console.log(`📧 Sending verification email to: ${to}`)
+    console.log(`📧 Sending verification email via Resend to: ${to}`);
 
-    const info = await transporter.sendMail({
-      from: `"PrivacyChat" <${fromAddress}>`,
-      to,
+    const { data, error } = await resend.emails.send({
+      from: `PrivacyChat <${fromAddress}>`,
+      to: [to],
       subject: 'Your PrivacyChat Verification Code',
       text: `Your verification code is: ${code}. It will expire in 10 minutes.`,
       html: `
@@ -113,24 +50,18 @@ export const sendVerificationEmail = async (to, code) => {
           <p>If you didn't request this code, you can safely ignore this email.</p>
         </div>
       `,
-    })
+    });
 
-    console.log('✅ Verification email sent:', info.messageId)
-    console.log('   Accepted:', info.accepted)
-    console.log('   Rejected:', info.rejected)
-    const previewUrl = nodemailer.getTestMessageUrl(info)
-    if (previewUrl) {
-      console.log('📧 Preview URL (Ethereal):', previewUrl)
+    if (error) {
+      console.error('❌ Error from Resend API:', error);
+      return { success: false, error: error.message };
     }
-    return { success: true }
-  } catch (error) {
-    console.error('❌ Error sending verification email:', {
-      message: error.message,
-      code: error.code,
-      command: error.command,
-      responseCode: error.responseCode,
-      response: error.response,
-    })
-    return { success: false, error: error.message || error.toString() }
+
+    console.log('✅ Verification email sent successfully via Resend. ID:', data?.id);
+    return { success: true, data };
+    
+  } catch (err) {
+    console.error('❌ Exception in sendVerificationEmail:', err);
+    return { success: false, error: err.message || err.toString() };
   }
-}
+};
