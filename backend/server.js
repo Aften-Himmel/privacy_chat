@@ -36,6 +36,9 @@ const io         = new Server(httpServer, {
 // Make io accessible inside route handlers via req.app.get('io')
 app.set('io', io)
 
+// ── Trust proxy (Render sits behind a reverse proxy) ──
+app.set('trust proxy', 1)
+
 // ── Security middleware ──
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' }, // allow cross-origin file downloads

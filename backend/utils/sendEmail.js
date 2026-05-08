@@ -22,6 +22,9 @@ async function createTransporter() {
       connectionTimeout: 10000,  // 10s to establish connection
       greetingTimeout: 10000,    // 10s for SMTP greeting
       socketTimeout: 15000,      // 15s for socket inactivity
+      // Force IPv4 — Render free tier does not support IPv6 outbound
+      tls: { servername: process.env.SMTP_HOST },
+      dnsOptions: { family: 4 },
     })
 
     // Verify the SMTP connection works
