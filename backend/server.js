@@ -78,17 +78,13 @@ app.use('/api/invitations', invitationRoutes)
 
 app.use('/api/messages', messageRoutes)
 
-// ── Email health-check (Resend) ──
+// ── Email health-check ──
 app.get('/api/health/email', async (req, res) => {
   try {
-    const apiKeySet = !!process.env.RESEND_API_KEY
-    const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev'
-
-    if (!apiKeySet) {
-      return res.status(500).json({ status: 'FAIL', reason: 'RESEND_API_KEY env var missing' })
+    if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      return res.status(500).json({ status: 'FAIL', reason: 'SMTP env vars missing' })
     }
-
-    res.json({ status: 'OK', message: 'Resend API key is configured', from: fromEmail })
+    res.json({ status: 'OK', message: 'SMTP env vars are configured', host: process.env.SMTP_HOST })
   } catch (err) {
     console.error('❌ Email health check failed:', err.message)
     res.status(500).json({ status: 'FAIL', error: err.message })

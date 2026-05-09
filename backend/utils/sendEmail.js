@@ -1,42 +1,97 @@
-import { Resend } from 'resend';
+import nodemailer from 'nodemailer'
+import dns from 'dns'
+import { promisify } from 'util'
 
-// Lazily initialized Resend client
-let resendClient = null;
+const resolve4 = promisify(dns.resolve4)
 
-function getResendClient() {
-  if (!resendClient) {
-    if (!process.env.RESEND_API_KEY) {
-      console.warn('⚠️ RESEND_API_KEY is not set in environment variables!');
-      // Return a dummy client if missing, preventing crashes but warning the user
-      return {
-        emails: {
-          send: async () => {
-             console.error('❌ Cannot send email: RESEND_API_KEY missing.');
-             throw new Error('RESEND_API_KEY is missing');
-          }
-        }
-      };
-    }
-    // Initialize standard client
-    resendClient = new Resend(process.env.RESEND_API_KEY);
-    console.log('✅ Resend client initialized');
+/**
+ * Resolve hostname to an IPv4 address.
+ * Render free-tier has no IPv6 outbound, so we must avoid
+ * the default dual-stack lookup that may return an AAAA record.
+ */
+async function resolveIPv4(hostname) {
+  try {
+    const addresses = await resolve4(hostname)
+    console.log(`📧 Resolved ${hostname} → ${addresses[0]} (IPv4)`)
+    return addresses[0]
+  } catch {
+    console.warn(`⚠️  Could not resolve ${hostname} to IPv4, using hostname as-is`)
+    return hostname
   }
-  return resendClient;
+}
+
+async function createTransporter() {
+  if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    const originalHost = process.env.SMTP_HOST
+    const ipv4Host = await resolveIPv4(originalHost)
+
+    console.log('📧 Creating SMTP transporter with:', {
+      host: ipv4Host,
+      originalHost,
+      port: Number(process.env.SMTP_PORT) || 587,
+      secure: process.env.SMTP_SECURE === 'true',
+      user: process.env.SMTP_USER,
+      passSet: !!process.env.SMTP_PASS,
+    })
+
+    const transporter = nodemailer.createTransport({
+      host: ipv4Host,
+      port: Number(process.env.SMTP_PORT) || 587,
+      secure: process.env.SMTP_SECURE === 'true',
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+      tls: { servername: originalHost },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
+    })
+
+    try {
+      await transporter.verify()
+      console.log('✅ SMTP connection verified successfully')
+    } catch (verifyErr) {
+      console.error('❌ SMTP verification FAILED:', verifyErr.message)
+      throw verifyErr
+    }
+
+    return transporter
+  } else {
+    console.warn('⚠️  SMTP env vars missing! Falling back to Ethereal (test-only)')
+    const testAccount = await nodemailer.createTestAccount()
+    console.log('Ethereal user:', testAccount.user)
+    return nodemailer.createTransport({
+      host: 'smtp.ethereal.email',
+      port: 587,
+      secure: false,
+      auth: { user: testAccount.user, pass: testAccount.pass },
+    })
+  }
+}
+
+let transporterPromise = null
+
+function getTransporter() {
+  if (!transporterPromise) {
+    transporterPromise = createTransporter().catch(err => {
+      transporterPromise = null
+      throw err
+    })
+  }
+  return transporterPromise
 }
 
 export const sendVerificationEmail = async (to, code) => {
   try {
-    const resend = getResendClient();
+    const transporter = await getTransporter()
+    const fromAddress = process.env.SMTP_USER || 'no-reply@privacychat.local'
 
-    // From address must be verified in Resend dashboard
-    // typically onboarding@resend.dev works for testing only to the registered email
-    const fromAddress = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
+    console.log(`📧 Sending verification email to: ${to}`)
 
-    console.log(`📧 Sending verification email via Resend to: ${to}`);
-
-    const { data, error } = await resend.emails.send({
-      from: `PrivacyChat <${fromAddress}>`,
-      to: [to],
+    const info = await transporter.sendMail({
+      from: `"PrivacyChat" <${fromAddress}>`,
+      to,
       subject: 'Your PrivacyChat Verification Code',
       text: `Your verification code is: ${code}. It will expire in 10 minutes.`,
       html: `
@@ -50,18 +105,18 @@ export const sendVerificationEmail = async (to, code) => {
           <p>If you didn't request this code, you can safely ignore this email.</p>
         </div>
       `,
-    });
+    })
 
-    if (error) {
-      console.error('❌ Error from Resend API:', error);
-      return { success: false, error: error.message };
-    }
-
-    console.log('✅ Verification email sent successfully via Resend. ID:', data?.id);
-    return { success: true, data };
-    
-  } catch (err) {
-    console.error('❌ Exception in sendVerificationEmail:', err);
-    return { success: false, error: err.message || err.toString() };
+    console.log('✅ Verification email sent:', info.messageId)
+    console.log('   Accepted:', info.accepted)
+    console.log('   Rejected:', info.rejected)
+    return { success: true }
+  } catch (error) {
+    console.error('❌ Error sending verification email:', {
+      message: error.message,
+      code: error.code,
+      command: error.command,
+    })
+    return { success: false, error: error.message || error.toString() }
   }
-};
+}
