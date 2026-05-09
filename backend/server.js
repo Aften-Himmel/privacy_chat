@@ -81,10 +81,10 @@ app.use('/api/messages', messageRoutes)
 // ── Email health-check ──
 app.get('/api/health/email', async (req, res) => {
   try {
-    if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
-      return res.status(500).json({ status: 'FAIL', reason: 'SMTP env vars missing' })
+    if (!process.env.BREVO_API_KEY) {
+      return res.status(500).json({ status: 'FAIL', reason: 'BREVO_API_KEY env var missing' })
     }
-    res.json({ status: 'OK', message: 'SMTP env vars are configured', host: process.env.SMTP_HOST })
+    res.json({ status: 'OK', message: 'Brevo API key is configured', from: process.env.BREVO_FROM_EMAIL })
   } catch (err) {
     console.error('❌ Email health check failed:', err.message)
     res.status(500).json({ status: 'FAIL', error: err.message })
